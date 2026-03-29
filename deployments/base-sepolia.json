@@ -1,0 +1,45 @@
+{
+  "network": "Base Sepolia",
+  "chainId": 84532,
+  "deployedAt": "2026-03-27",
+  "contracts": {
+    "SportsbookMarket": {
+      "address": "0xF536a69C12230FB094fA3C5850f8569957158AC2",
+      "version": "1.7",
+      "deployTx": "0x536ae2b4",
+      "block": 39438757,
+      "verified": {
+        "sourcify": true,
+        "blockscout": true
+      },
+      "constructorArgs": {
+        "_usdc": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+        "_oo": "0x0F7fC5E6482f096380db6158f978167b57388deE",
+        "_spreadMax": 100,
+        "_spreadMin": -100,
+        "_feePercent": 200
+      },
+      "notes": "Testnet deployment. MIN_BOND set to 1 USDC for testnet. Mainnet will use 100 USDC."
+    }
+  },
+  "externalContracts": {
+    "USDC": {
+      "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      "issuer": "Circle",
+      "notes": "Requires type(uint256).max approval. Exact amounts fail intermittently."
+    },
+    "UMA_OOV3": {
+      "address": "0x0F7fC5E6482f096380db6158f978167b57388deE",
+      "notes": "assertTruth() used with explicit USDC currency. defaultCurrency() not used."
+    }
+  },
+  "testMarkets": [
+    {
+      "gameId": "NFL-2026-HOME-Chiefs-AWAY-49ers",
+      "address": "0xF536a69C12230FB094fA3C5850f8569957158AC2",
+      "oracleZ": -35000,
+      "status": "assertionActive",
+      "notes": "Full end-to-end test. assertTruth() path confirmed working."
+    }
+  ]
+}

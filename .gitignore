@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+.env
+.env.*
+
+# Build artifacts
+artifacts/
+cache/
+out/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keys — never commit these
+*.key
+*.pem
+mnemonic.txt
