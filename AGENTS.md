@@ -12,7 +12,7 @@ const markets = await factory.getOpenMarkets();
 
 // 2. Evaluate a market
 const [gameId, z, gPool, lePool, tPool, isOpen] = await market.getMarketState();
-const [currentPayout, balancedPayout, impliedVig] = await market.getMarketEV(stake, greaterThan);
+const [currentPayout, liquidPayout, impliedVig] = await market.getMarketEV(stake, greaterThan);
 
 // 3. Approve and bet
 await usdc.approve(marketAddress, ethers.MaxUint256);
@@ -26,17 +26,23 @@ await market.claimAllPayouts();
 
 ## Contract Addresses
 
+### Base Mainnet
+
+| Contract | Address |
+|---|---|
+| SportsbookFactory | `0x08BA5624107536d1CEA043B372978E7e9516E214` |
+| USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |
+
+Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover active markets.
+
 ### Base Sepolia (Testnet)
 
 | Contract | Address |
 |---|---|
-| SportsbookMarket (latest) | `0xF536a69C12230FB094fA3C5850f8569957158AC2` |
+| SportsbookMarket (reference) | `0xF536a69C12230FB094fA3C5850f8569957158AC2` |
 | USDC (Circle testnet) | `0x036cbd53842c5426634e7929541ec2318f3dcf7e` |
 | UMA OOV3 | `0x0F7fC5E6482f096380db6158f978167b57388deE` |
-
-### Base Mainnet
-
-Coming soon.
 
 ---
 
@@ -77,7 +83,7 @@ address[] memory markets = factory.getOpenMarkets();
 
 ### Get market by game ID
 ```solidity
-address market = factory.getMarketByGameId("NFL-2026-HOME-Chiefs-AWAY-49ers");
+address market = factory.getMarketByGameId("NFL-2026-01-15-HOME-Chiefs-AWAY-49ers");
 ```
 
 ### Get markets needing settlement
@@ -106,18 +112,16 @@ address[] memory unsettled = factory.getUnsettledMarkets();
 ```solidity
 (
     uint256 currentPayout,   // payout at current pool ratio
-    uint256 balancedPayout,  // payout if pools reach perfect balance
+    uint256 liquidPayout,  // payout at liquidity (balanced pools)
     uint256 impliedVig       // protocol fee in bps (200 = 2%)
 ) = market.getMarketEV(stake, greaterThan);
 ```
 
-**Reading currentPayout:** This is the gross return if the market closed right now. Divide by stake for the multiplier. Subtract stake for net profit.
+**Reading `currentPayout`:** Gross return if the market closed right now. Divide by stake for the multiplier. Subtract stake for net profit. Use this to capture early-imbalance opportunity.
 
-**Reading balancedPayout:**
-- Betting minority side: `balancedPayout > currentPayout` — you have favorable odds that worsen as more money balances the market
-- Betting majority side: `balancedPayout < currentPayout` — you have unfavorable odds that improve as more money balances the market
+**Reading `liquidPayout`:** Payout at liquidity, when the Z line has balanced the pools — your steady-state EV. At 2% fee on a balanced pool, a $104.17 bet returns $100 net. This is the number to use for long-run EV modeling. If `currentPayout > liquidPayout`, you're locking favorable early-market odds before opposing flow arrives. If they're equal, the market is already at equilibrium.
 
-**impliedVig:** This is the complete cost. 200 = 2%. No hidden spread, no maker-taker. Use this directly in EV calculations.
+**`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. No spread, no maker-taker, no order book. Compare directly against sportsbook vig (~450 bps at -110) or Polymarket spread-inclusive costs. Pool imbalance is a transient early-market condition that the Z line self-corrects — it is not a structural cost.
 
 ### Kelly criterion
 ```javascript
@@ -126,6 +130,8 @@ const netOdds = grossMultiplier - 1;
 const kellyFraction = (probability * netOdds - (1 - probability)) / netOdds;
 const betSize = bankroll * kellyFraction;
 ```
+
+For steady-state sizing, use `liquidPayout` as the gross multiplier input. For opportunity sizing on early-imbalance markets, use `currentPayout`.
 
 ---
 
@@ -155,8 +161,8 @@ Anyone can submit the result and anyone can execute after liveness. You are ince
 // Step 1: Check bond requirement
 uint256 bond = market.getSettlementBond();
 
-// Step 2: Approve bond
-usdc.approve(marketAddress, bond > 0 ? bond : 1e6);
+// Step 2: Approve bond (always use max — see approval note above)
+usdc.approve(marketAddress, type(uint256).max);
 
 // Step 3: Submit result (finalSpread is a whole integer)
 market.requestSettlement(finalSpread);
@@ -167,7 +173,9 @@ market.requestSettlement(finalSpread);
 market.executeSettlement();
 ```
 
-**Bond mechanics:** Your bond is returned if the assertion is undisputed or upheld by UMA's DVM. It is lost if your assertion is successfully disputed. Submit accurate results.
+**Bond mechanics:** Your bond is returned if the assertion is undisputed or upheld by UMA's DVM. It is lost if your assertion is successfully disputed. Minimum bond: 100 USDC. Submit accurate results.
+
+**No owner override:** `settle()` does not exist. Settlement paths are UMA assertion or `triggerRefund()` after 7 days. Fully trustless.
 
 ---
 
@@ -232,15 +240,21 @@ event RefundTriggered(address indexed by);
 ## gameId Format
 
 ```
-"SPORT-YEAR-HOME-TeamName-AWAY-TeamName"
+"SPORT-YYYY-MM-DD-HOME-TeamName-AWAY-TeamName"
 ```
 
 Examples:
 ```
-"NFL-2026-HOME-Chiefs-AWAY-49ers"
-"NBA-2026-HOME-Lakers-AWAY-Celtics"
-"MLB-2026-HOME-Yankees-AWAY-RedSox"
-"NHL-2026-HOME-Avalanche-AWAY-Lightning"
+"NFL-2026-01-15-HOME-Chiefs-AWAY-49ers"
+"NBA-2026-05-15-HOME-Lakers-AWAY-Celtics"
+"MLB-2026-07-04-HOME-Yankees-AWAY-RedSox"
+"NHL-2026-04-22-HOME-Avalanche-AWAY-Lightning"
+```
+
+For MLB doubleheaders or split squad games on the same date, append `-G1`, `-G2`:
+```
+"MLB-2026-07-04-HOME-Yankees-AWAY-RedSox-G1"
+"MLB-2026-07-04-HOME-Yankees-AWAY-RedSox-G2"
 ```
 
 **Sign convention:**
@@ -332,5 +346,5 @@ if (available) market.triggerRefund();
 
 ---
 
-*Even Steven v1.7 — March 2026*
-*Audited by Claude Opus (3 rounds). All critical and high findings resolved.*
+*Even Steven v1.7 — April 2026*
+*Audited by Claude Opus (4 rounds). All critical and high findings resolved.*
