@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.3/contracts/token/ERC20/IERC20.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.3/contracts/access/Ownable.sol";
-import "./SportsbookMarket.sol";
+import "@openzeppelin/contracts@4.9.3/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts@4.9.3/access/Ownable.sol";
+import "./SportsbookMarket-v1_8_1.sol";
+
+error InvalidUSDCAddress();
+error InvalidOOAddress();
+error NotAuthorized();
+error FeeBelowMinimum();
+error FeeExceedsMaximum();
+error GameIdRequired();
+error MarketAlreadyExists();
+error SeedPullFailed();
+error ApprovalFailed();
 
 /**
- * @title SportsbookFactory v1.2
+ * @title SportsbookFactory v1.3 (pairs with SportsbookMarket v1.8.1)
  * @notice Deploys and tracks SportsbookMarket contracts.
  *
  * WHAT'S NEW IN v1.2:
@@ -16,7 +26,7 @@ import "./SportsbookMarket.sol";
  *     Adjust down toward 100 (1%) if Polymarket/Kalshi undercut us on volume markets.
  *   - setDefaultFee(): owner can update fee for all future markets without redeploying.
  *     Existing markets are unaffected - fee is locked at creation time per market.
- *   - H-3 FIX: transferFrom wrapped in require() throughout.
+ *   - H-3 FIX: transferFrom return value checked; reverts with a custom error.
  *   - Max USDC approval for Circle USDC compatibility.
  *     Circle's USDC on Base Sepolia rejects exact-amount approvals in some cases.
  *     Using type(uint256).max avoids this. Factory approves max then market pulls
@@ -31,10 +41,9 @@ import "./SportsbookMarket.sol";
  *   - Owner or whitelisted operators can create markets
  *   - addOperator() / removeOperator() for future agent market creation
  *   - getOpenMarkets(), getUnsettledMarkets(), getRefundableMarkets()
- *   - getMarketByGameId(), getMarketInfo(), getAllMarkets()
+ *   - getMarketInfo(), getAllMarkets()
  *
  * MAINNET TODO:
- *   - Replace Remix HTTP imports with npm (@openzeppelin/contracts)
  *   - Add pagination to view functions (M-1) at ~500+ markets
  *   - Add per-market fee override in createMarketWithBoundsAndFee()
  *   - Wire operator authentication to MoltBook identity
@@ -101,8 +110,8 @@ contract SportsbookFactory is Ownable {
      *              Base Mainnet: check https://docs.uma.xyz/resources/network-addresses
      */
     constructor(address _usdc, address _oo) {
-        require(_usdc != address(0), "Invalid USDC address");
-        require(_oo   != address(0), "Invalid OO address");
+        if (_usdc == address(0)) revert InvalidUSDCAddress();
+        if (_oo   == address(0)) revert InvalidOOAddress();
         usdc = _usdc;
         oo   = _oo;
     }
@@ -112,10 +121,7 @@ contract SportsbookFactory is Ownable {
     // ─────────────────────────────────────────────
 
     modifier onlyOperatorOrOwner() {
-        require(
-            msg.sender == owner() || operators[msg.sender],
-            "Not authorized"
-        );
+        if (msg.sender != owner() && !operators[msg.sender]) revert NotAuthorized();
         _;
     }
 
@@ -129,11 +135,11 @@ contract SportsbookFactory is Ownable {
      *         Agents checking getMarketInfo() will see the fee locked at
      *         the time each market was created.
      *
-     * @param newFeePercent Fee in basis points. 200 = 2%, 100 = 1%, max 1000 = 10%, min 20 = 0.2%.
+     * @param newFeePercent Fee in basis points. 200 = 2%, 100 = 1%, max 1000 = 10%.
      */
     function setDefaultFee(uint256 newFeePercent) external onlyOwner {
-        require(newFeePercent >= MIN_FEE, "Fee below 0.2% minimum");
-        require(newFeePercent <= MAX_FEE, "Fee exceeds 10% maximum");
+        if (newFeePercent < MIN_FEE) revert FeeBelowMinimum();
+        if (newFeePercent > MAX_FEE) revert FeeExceedsMaximum();
         uint256 oldFee = defaultFeePercent;
         defaultFeePercent = newFeePercent;
         emit DefaultFeeUpdated(oldFee, newFeePercent);
@@ -261,16 +267,6 @@ contract SportsbookFactory is Ownable {
     }
 
     /**
-     * @notice Returns market address for a specific game.
-     *         Returns address(0) if no market exists for this game.
-     */
-    function getMarketByGameId(string calldata gameId)
-        external view returns (address)
-    {
-        return marketByGameId[gameId];
-    }
-
-    /**
      * @notice Returns all markets ever created.
      */
     function getAllMarkets() external view returns (address[] memory) {
@@ -286,7 +282,7 @@ contract SportsbookFactory is Ownable {
 
     /**
      * @notice Full snapshot of a market in one call.
-     *         Agents: use after finding a market via getOpenMarkets() or getMarketByGameId().
+     *         Agents: use after finding a market via getOpenMarkets() or the marketByGameId mapping.
      *         feePercent: locked at market creation time, in basis points (200 = 2%).
      */
     function getMarketInfo(address market) external view returns (
@@ -327,11 +323,8 @@ contract SportsbookFactory is Ownable {
         int256 spreadMin,
         uint256 feePercent
     ) internal returns (address) {
-        require(bytes(gameId).length > 0, "gameId cannot be empty");
-        require(
-            marketByGameId[gameId] == address(0),
-            "Market already exists for this game"
-        );
+        if (bytes(gameId).length == 0) revert GameIdRequired();
+        if (marketByGameId[gameId] != address(0)) revert MarketAlreadyExists();
 
         // Deploy new market — fee locked at creation time
         SportsbookMarket market = new SportsbookMarket(
@@ -342,20 +335,19 @@ contract SportsbookFactory is Ownable {
             feePercent
         );
 
-        // H-3 FIX: require() on transferFrom
+        // H-3 FIX: transferFrom return value checked (custom error)
         uint256 seedAmount = market.PROTOCOL_SEED() * 2;
-        require(
-            IERC20(usdc).transferFrom(msg.sender, address(this), seedAmount),
-            "Seed transfer failed"
-        );
+        if (!IERC20(usdc).transferFrom(msg.sender, address(this), seedAmount)) revert SeedPullFailed();
 
         // Use max approval — Circle USDC on Base rejects exact-amount approvals
-        require(IERC20(usdc).approve(address(market), type(uint256).max), "Approval failed");
+        if (!IERC20(usdc).approve(address(market), type(uint256).max)) revert ApprovalFailed();
         market.openMarket(gameId, oracleZ);
 
-        // Intentionally unwrapped - if zero-approve fails on some USDC implementations,
-        // the market still deploys correctly. A dangling approval is preferable to
-        // reverting an otherwise successful market creation.
+        // NEW-1 FIX: Reset approval after seed pull to prevent dangling unlimited
+        // approval over factory balance. If USDC ever lands in the factory
+        // (airdrop, mistyped destination), no market can drain it.
+        // Note: if Circle USDC rejects 0-amount approve on a future network,
+        // skip this line and add to mainnet TODO.
         IERC20(usdc).approve(address(market), 0);
 
         // Transfer ownership to caller so they can closeBetting/settle/cancel
