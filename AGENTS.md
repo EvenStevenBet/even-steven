@@ -40,7 +40,8 @@ await market.claimAllPayouts();
 
 | Contract | Address |
 |---|---|
-| SportsbookFactory v1.3 | `0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027` |
+| SportsbookFactory v1.4 | `0xTODO_NEW_FACTORY_ADDRESS` |
+| ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — v1.8.1 markets cannot settle, UMA identifier bug fixed in v1.9)* |
 | ~~SportsbookFactory v1.2~~ | ~~`0x08BA5624107536d1CEA043B372978E7e9516E214`~~ *(retired)* |
 | USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |
@@ -388,5 +389,5 @@ These are not loopholes. They are the protocol working as designed — early liq
 
 ---
 
-*Even Steven v1.8.1 — June 2026*
-*Audited by Claude Opus, five rounds, March–June 2026. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
+*Even Steven v1.9 — September 2026*
+*Audited by Claude Opus, five rounds, March–June 2026, plus a delta audit (August 2026) covering the v1.9 UMA identifier fix. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
