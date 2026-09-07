@@ -40,8 +40,8 @@ await market.claimAllPayouts();
 
 | Contract | Address |
 |---|---|
-| SportsbookFactory v1.4 | `0xTODO_NEW_FACTORY_ADDRESS` |
-| ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — v1.8.1 markets cannot settle, UMA identifier bug fixed in v1.9)* |
+| SportsbookFactory v1.4 | `0xB09aD0b9B52E628328151505580be1A632326E0c` |
+| ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — UMA identifier bug, use triggerRefund() on stranded markets)* |
 | ~~SportsbookFactory v1.2~~ | ~~`0x08BA5624107536d1CEA043B372978E7e9516E214`~~ *(retired)* |
 | USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |

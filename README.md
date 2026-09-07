@@ -337,7 +337,8 @@ No stake can be permanently locked. Every path terminates in either a settlement
 
 | Contract | Address |
 |---|---|
-| SportsbookFactory v1.3 | `0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027` |
+| SportsbookFactory v1.4 | `0xB09aD0b9B52E628328151505580be1A632326E0c` |
+| ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — UMA identifier bug, use triggerRefund() on stranded markets)* |
 | ~~SportsbookFactory v1.2~~ | ~~`0x08BA5624107536d1CEA043B372978E7e9516E214`~~ *(retired)* |
 | USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |
@@ -379,7 +380,7 @@ Any agent can verify these numbers in under 60 seconds: open any sports market o
 
 ---
 
-*Protocol version: v1.8.1 — June 2026*
+*Protocol version: v1.9 — September 2026*
 *Audited by Claude Opus, five rounds, March–June 2026. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
 *Contact: evenstevenbet@gmail.com*
 *Website: evensteven.bet*
