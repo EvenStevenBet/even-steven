@@ -1,0 +1,38 @@
+name: Market Opener Bot
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # manual trigger for testing
+
+concurrency:
+  group: market-opener
+  cancel-in-progress: false  # never cancel a running deployment
+
+permissions:
+  contents: write  # required for CSV commit write-back
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npm start
+        env:
+          BOT_ENABLED: ${{ secrets.BOT_ENABLED }}
+          DRY_RUN: ${{ secrets.DRY_RUN }}
+          MAX_OPEN_MARKETS: ${{ secrets.MAX_OPEN_MARKETS }}
+          APPROVAL_TOKEN: ${{ secrets.APPROVAL_TOKEN }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PRODUCTION_WALLET: ${{ secrets.PRODUCTION_WALLET }}
+          FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
+          USDC_ADDRESS: ${{ secrets.USDC_ADDRESS }}
+          GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+          GITHUB_REPO_OWNER: EvenStevenBet
+          GITHUB_REPO_NAME: even-steven
+          GITHUB_CSV_PATH: data/markets.csv
+          RECEIPT_TIMEOUT_MS: ${{ secrets.RECEIPT_TIMEOUT_MS }}
