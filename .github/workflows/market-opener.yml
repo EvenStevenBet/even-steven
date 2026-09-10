@@ -14,6 +14,9 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: market-opener-bot
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+
+# Secrets — pattern-based so renaming a key file can't silently un-ignore it
+.env
+.env.*
+!.env.example
+secrets/
+*service-account*.json
+*credentials*.json
+*.pem
+*.key
+
+# Logs may contain operational detail
+logs/
+*.jsonl
+cron.log

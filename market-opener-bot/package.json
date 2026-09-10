@@ -1,0 +1,23 @@
+{
+  "name": "market-opener-bot",
+  "version": "2.0.0",
+  "description": "Automated NFL market opener for Even Steven (SportsbookFactory v1.3)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/runner.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
