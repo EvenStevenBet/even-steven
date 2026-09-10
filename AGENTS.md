@@ -34,6 +34,149 @@ await market.claimAllPayouts();
 
 ---
 
+## HTTP Agent API (x402)
+
+For agents that would rather not run their own RPC client, Even Steven also exposes read-only
+market data over plain HTTP at `evensteven.bet`, monetized per-request via the
+[x402](https://x402.org) protocol (HTTP `402 Payment Required`). No API key, no account —
+pay per call in USDC on Base.
+
+**These endpoints are read/quote only. There is no `POST /api/bet`** — see **v2 note** below.
+
+### Payment flow
+
+1. Agent calls a protected endpoint with no payment.
+2. Server responds `402 Payment Required` with payment terms (price, network, recipient) in
+   the response body, per the x402 spec.
+3. Agent's x402 client signs a USDC payment authorization and retries the request with an
+   `X-PAYMENT` header.
+4. Server verifies and settles the payment against the facilitator, then returns the data.
+
+The easiest way to consume these endpoints is `x402-fetch`:
+
+```javascript
+import { wrapFetchWithPayment } from 'x402-fetch';
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { base } from 'viem/chains';
+
+const account = privateKeyToAccount(process.env.AGENT_PRIVATE_KEY);
+const walletClient = createWalletClient({ account, chain: base, transport: http() });
+const fetchWithPayment = wrapFetchWithPayment(fetch, walletClient);
+
+const res = await fetchWithPayment('https://evensteven.bet/api/markets/agent');
+const data = await res.json();
+```
+
+Install with `npm install x402-fetch`.
+
+Even Steven's mainnet endpoints settle through the Coinbase CDP facilitator. Agents running
+their own x402 client are not required to use CDP — any compatible facilitator on Base works,
+since payment verification is against the on-chain USDC transfer, not a specific facilitator.
+
+### Endpoints
+
+| Endpoint | Price | Purpose |
+|---|---|---|
+| `GET /api/markets/agent` | $0.05 | Live on-chain snapshot of all open markets, enriched with EV for a 100 USDC reference stake on both sides |
+| `GET /api/bet/quote` | $0.01 | EV quote for a specific gameId/side/stake, including fee and total cost |
+| `GET /api/bet/status` | $0.01 | Bet positions for a given bettor address on a given market |
+
+**`GET /api/markets/agent`** — no query params. Always fresh (no cache).
+
+```json
+{
+  "markets": [
+    {
+      "marketAddress": "0x...",
+      "gameId": "NFL-2026-09-07-HOME-Chiefs-AWAY-Ravens",
+      "currentZ": "-35000",
+      "currentZDisplay": "-3.5",
+      "greaterPool": "104000000",
+      "lessEqualPool": "98000000",
+      "totalPool": "204000000",
+      "isOpen": true,
+      "isSettled": false,
+      "ev": {
+        "referenceStake": "100000000",
+        "home": { "currentPayout": "...", "liquidPayout": "...", "impliedVig": "200" },
+        "away": { "currentPayout": "...", "liquidPayout": "...", "impliedVig": "200" }
+      }
+    }
+  ],
+  "relay": {
+    "note": "POST /api/bet is not available — agent write betting requires v2 contract (placeBetFor). Coming soon.",
+    "quoteEndpoint": "GET /api/bet/quote",
+    "statusEndpoint": "GET /api/bet/status"
+  },
+  "timestamp": 1757262000000
+}
+```
+
+If a single market's on-chain read fails, it appears in `markets` with an `error` field instead
+of failing the whole response.
+
+**`GET /api/bet/quote?gameId=<gameId>&side=home|away&stake=<decimal USDC>`**
+
+```json
+{
+  "marketAddress": "0x...",
+  "gameId": "NFL-2026-09-07-HOME-Chiefs-AWAY-Ravens",
+  "side": "home",
+  "greaterThan": true,
+  "stake": "100000000",
+  "fee": "2000000",
+  "totalCost": "102000000",
+  "currentZ": "-35000",
+  "currentZDisplay": "-3.5",
+  "ev": {
+    "currentPayout": "...",
+    "liquidPayout": "...",
+    "impliedVig": "200",
+    "netProfitAtLiquidity": "..."
+  },
+  "note": "POST /api/bet not available on v1. v2 placeBetFor coming in 1-2 weeks."
+}
+```
+
+Errors: `400` missing/invalid `gameId`/`side`/`stake` (stake must be ≥ 1 USDC), `404` no market
+for that `gameId`, `409` market found but not open for betting.
+
+**`GET /api/bet/status?marketAddress=<address>&bettor=<address>`**
+
+Both params required — reads `getBetsByAddress` / `getBet` directly (no log indexing).
+
+```json
+{
+  "marketAddress": "0x...",
+  "bettor": "0x...",
+  "bets": [
+    {
+      "betId": "0",
+      "side": "home",
+      "greaterThan": true,
+      "stake": "100000000",
+      "lockedZ": "-35000",
+      "lockedZDisplay": "-3.5",
+      "claimed": false
+    }
+  ]
+}
+```
+
+Errors: `400` if `marketAddress` or `bettor` is missing or not a valid address.
+
+### v2 note
+
+**`POST /api/bet` is not available on v1.** `placeBet()` records `msg.sender` as the bettor, so
+a server-side relay would require custodying agent funds — Even Steven does not do that.
+Non-custodial agent betting needs a `placeBetFor(address bettor, ...)` contract entry point,
+planned for v2 (1–2 weeks out). Until then, agents place bets themselves directly against the
+contract (see **Quick Start** above and **Placing a Bet** below) — the x402 endpoints above are
+read/quote only.
+
+---
+
 ## Contract Addresses
 
 ### Base Mainnet
