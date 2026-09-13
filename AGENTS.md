@@ -82,6 +82,11 @@ since payment verification is against the on-chain USDC transfer, not a specific
 | `GET /api/bet/quote` | $0.01 | EV quote for a specific gameId/side/stake, including fee and total cost |
 | `GET /api/bet/status` | $0.01 | Bet positions for a given bettor address on a given market |
 
+`ev.home`/`ev.away` in both endpoints below are computed server-side with the seed-corrected
+formula (see the correction note under **Pre-Bet Evaluation**) — they are accurate as returned, no
+client-side adjustment needed. This differs from calling `getMarketEV`/`simulatePayout` directly
+against the contract, which still under-quotes.
+
 **`GET /api/markets/agent`** — no query params. Always fresh (no cache).
 
 ```json
@@ -279,13 +284,37 @@ address[] memory unsettled = factory.getUnsettledMarkets();
 
 **Reading `currentPayout`:** Gross return from the pool if the market closed right now. Divide by stake for the multiplier. Use this to capture early-imbalance opportunity. Remember the 2% fee was paid on your stake at placement, so net profit = currentPayout − stake − fee.
 
-**Reading `liquidPayout`:** Payout at liquidity, when the Z line has balanced the pools — your steady-state EV. A $100 stake returns ~$200 gross; net of the $2 placement fee, ~$98 profit — 2% friction. This is the number to use for long-run EV modeling. If `currentPayout > liquidPayout`, you're locking favorable early-market odds before opposing flow arrives. If they're equal, the market is already at equilibrium.
+**Reading `liquidPayout`:** Payout at liquidity, when the Z line has balanced the pools — your steady-state EV. At balance, a $100 stake returns **exactly** $200 gross — this is exact, not an approximation a thin pool merely approaches — net of the $2 placement fee, exactly $98 profit — 2% friction, full stop. This is the number to use for long-run EV modeling. If `currentPayout > liquidPayout`, you're locking favorable early-market odds before opposing flow arrives. If they're equal, the market is already at equilibrium.
+
+> **Correction — the deployed contract's `getMarketEV`/`simulatePayout` currently under-quote.**
+> Their `liquidPayout`/`currentPayout` denominators are `greaterPool`/`lessEqualPool` (or `simTotal/2`
+> for liquidPayout) *without* excluding that side's share of `PROTOCOL_SEED` — so calling these
+> functions directly on-chain returns a number slightly below the true payout, worst on thin pools
+> and converging to correct as pools deepen. Real settlement (`_calculatePayout`/
+> `_sumWinningStakes`) never counts the seed as a winning stake, so this is purely a quoting issue —
+> it does not mean you'll actually be paid less. Even Steven's own x402 endpoints below already
+> apply the correction server-side; if you call `getMarketEV`/`simulatePayout` directly against the
+> contract instead, apply the same fix yourself:
+>
+> ```solidity
+> // Same math getMarketEV() already does, with PROTOCOL_SEED stripped from
+> // the winning-side denominator only — never from `distributable`, which
+> // already correctly subtracts the aggregate protocolSeedTotal (stripping
+> // it there too would double-count).
+> uint256 simSide          = greaterThan ? gPool + stake : lePool + stake;
+> uint256 simTotal          = tPool + stake;
+> uint256 distributable     = simTotal - protocolSeedTotal;
+> uint256 realWinningStake  = simSide - PROTOCOL_SEED;
+> uint256 correctedCurrentPayout = stake * distributable / realWinningStake;
+> uint256 realLiquidSide    = (simTotal / 2) - PROTOCOL_SEED;
+> uint256 correctedLiquidPayout  = stake * distributable / realLiquidSide;
+> ```
 
 **`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. Charged on your stake at placement; there is no settlement haircut, so 2% is the entire story. Compare directly against sportsbook vig (~450 bps at -110) or order-book platforms' stacked taker-fee + overround + slippage. Pool imbalance is a transient early-market condition that the Z line self-corrects — it is not a structural cost.
 
 ### Kelly criterion
 ```javascript
-const grossMultiplier = Number(liquidPayout) / Number(stake); // ~2.0 at liquidity
+const grossMultiplier = Number(liquidPayout) / Number(stake); // exactly 2.0 at liquidity, once corrected (see note above)
 const netOdds = grossMultiplier - 1;
 const feeRate = Number(impliedVig) / 10000;                   // 0.02
 // Cost basis includes the 2% placement fee on stake
@@ -484,7 +513,7 @@ These are not loopholes. They are the protocol working as designed — early liq
 
 | Constant | Value | Notes |
 |---|---|---|
-| `PROTOCOL_SEED` | 1e6 (1 USDC) | Added per side at market open |
+| `PROTOCOL_SEED` | 1e6 (1 USDC) | Added per side at market open. Exists only so `_updateZ()`'s pool ratio is never a divide-by-zero before either side has a real bet — excluded from `distributable` and returned to the protocol at settlement, so it never dilutes a winner's payout |
 | `FEE_PERCENT` | 200 | Flat 2% protocol fee in bps, charged on stake at placement, set at deployment |
 | `MIN_BOND` | 100e6 (100 USDC) | Floor; actual bond = max(UMA minimum, 100 USDC). Base mainnet UMA minimum ~500 USDC |
 | `MAX_BETS` | 1000 | Per market cap |

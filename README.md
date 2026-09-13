@@ -83,7 +83,7 @@ Each game gets its own market contract. To bet on a game:
 5. After a 2-hour UMA liveness window, call `executeSettlement()` to finalize
 6. Winners call `claimAllPayouts()` to receive their share of the pool
 
-**The payout logic:** Winners split the entire pool of stakes (minus the protocol seed) proportionally to their stake. The fee was already taken at placement, so there is no settlement haircut. There is no house taking the other side. Losers' stakes go to winners. Zero-sum between bettors.
+**The payout logic:** Winners split the entire pool of stakes proportionally to their stake. The protocol seed (2 USDC total, added at market open) is set aside from that split and returned to the protocol at settlement — it is never a competing claim on the pool, so it does not dilute what winners receive. At a balanced pool this is exact: a $100 stake returns exactly $200 gross, not an approximation that a thin pool merely approaches. The fee was already taken at placement, so there is no settlement haircut. There is no house taking the other side. Losers' stakes go to winners. Zero-sum between bettors.
 
 ---
 
@@ -131,7 +131,29 @@ The fee is collected when you place the bet — it never enters the pool. Winner
 | `liquidPayout` | Gross pool payout at liquidity, when the Z line has balanced the pools — your steady-state return |
 | `impliedVig` | Protocol fee in basis points — the complete cost, nothing hidden |
 
-**`liquidPayout` is the number that matters for steady-state EV.** This is what Even Steven converges to as the market reaches liquidity. A $100 stake returns ~$200 gross on a win; net of the $2 placement fee, that's ~$98 profit — 2% friction. Use this for long-term positioning.
+**`liquidPayout` is the number that matters for steady-state EV.** This is what Even Steven converges to as the market reaches liquidity. At balance, a $100 stake returns **exactly** $200 gross on a win — not an approximation — net of the $2 placement fee, exactly $98 profit — 2% friction, full stop. Use this for long-term positioning.
+
+> **Note on the deployed contract:** `getMarketEV`/`simulatePayout` as currently deployed compute
+> `liquidPayout`'s denominator from `simTotal / 2`, without excluding that side's share of
+> `PROTOCOL_SEED` — so the **on-chain function itself currently under-quotes** slightly, worst on
+> thin pools, converging to the correct number as pools deepen. This does not affect real
+> settlement (`_calculatePayout`/`_sumWinningStakes` never count the seed as a winning stake), only
+> the pre-bet quote. Even Steven's own x402 endpoints (`evensteven.bet/api/*`) already apply the
+> corrected formula server-side. If you call `getMarketEV`/`simulatePayout` directly against the
+> contract, apply the same correction yourself:
+>
+> ```solidity
+> // getMarketEV()'s own math, with PROTOCOL_SEED stripped from the
+> // winning-side denominator only (never from `distributable`, which
+> // already correctly subtracts the aggregate protocolSeedTotal).
+> uint256 simSide   = greaterThan ? gPool + stake : lePool + stake;
+> uint256 simTotal   = tPool + stake;
+> uint256 distributable = simTotal - protocolSeedTotal;
+> uint256 realWinningStake = simSide - PROTOCOL_SEED;
+> uint256 correctedCurrentPayout = stake * distributable / realWinningStake;
+> uint256 realLiquidSide = (simTotal / 2) - PROTOCOL_SEED;
+> uint256 correctedLiquidPayout  = stake * distributable / realLiquidSide;
+> ```
 
 **`currentPayout`** is your opportunity number — the snapshot before the market reaches liquidity. If it's higher than `liquidPayout`, you're catching an early imbalance and locking favorable odds.
 
@@ -166,7 +188,8 @@ address market = factory.marketByGameId("NFL-2026-01-15-HOME-Chiefs-AWAY-49ers")
 // Evaluate EV before betting (payouts are gross of the 2% placement fee)
 (currentPayout, liquidPayout, impliedVig) = market.getMarketEV(stake, greaterThan);
 
-// Kelly criterion input: liquidPayout / stake = gross multiplier at liquidity (~2.0)
+// Kelly criterion input: liquidPayout / stake = gross multiplier at liquidity (exactly 2.0 at balance,
+// once corrected for the on-chain quoting quirk noted above — see corrected formula there)
 // True cost basis = stake * (1 + impliedVig / 10000)  // the 2% fee is on stake
 // Opportunity check: if currentPayout > liquidPayout, early imbalance favors you
 // Net EV = (probability * currentPayout) - stake - (stake * impliedVig / 10000)
@@ -275,7 +298,7 @@ Zero = tie.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `PROTOCOL_SEED` | 1 USDC | Seed per side added by protocol at open |
+| `PROTOCOL_SEED` | 1 USDC | Seed per side added by protocol at open — exists only so `_updateZ()`'s `greaterPool/lessEqualPool` ratio is never a divide-by-zero before either side has a real bet; it is excluded from `distributable` and returned to the protocol at settlement, so it never dilutes a winner's payout |
 | `FEE_PERCENT` | 200 | Flat 2% protocol fee in basis points, charged on stake at placement (set at deployment, immutable) |
 | `MIN_BOND` | 100 USDC | Floor; actual bond = max(UMA minimum, 100 USDC). Base mainnet UMA minimum is ~500 USDC |
 | `MAX_BETS` | 1000 | Maximum bets per market |
