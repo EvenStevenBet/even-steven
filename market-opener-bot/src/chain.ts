@@ -23,7 +23,10 @@ import { config } from './config.js';
 // for the underlying public mapping — marketByGameId — works correctly and
 // returns the identical value. We call that instead.
 const factoryAbi = parseAbi([
-  'function createMarket(string gameId, int256 oracleZ) returns (address)',
+  // v1.5 BREAKING CHANGE: createMarket takes a third argument, the per-side
+  // protocol seed in USDC base units. The two-argument v1.4 selector does not
+  // exist on v1.5 — calling it reverts. Verified against the deployed factory.
+  'function createMarket(string gameId, int256 oracleZ, uint256 protocolSeed) returns (address)',
   'function marketByGameId(string gameId) view returns (address)',
   'function getOpenMarkets() view returns (address[])',
   'event MarketCreated(address indexed market, string gameId, int256 oracleZ, int256 spreadMax, int256 spreadMin, uint256 feePercent, address indexed creator)',
@@ -44,6 +47,21 @@ const erc20Abi = parseAbi([
   'function approve(address spender, uint256 amount) returns (bool)',
   'function balanceOf(address account) view returns (uint256)',
 ]);
+
+/**
+ * Per-side protocol seed passed to createMarket (SportsbookFactory v1.5+).
+ *
+ * 1 USDC/side, matching every market created since v1.8.1. The factory pulls
+ * LAUNCH_SEED * 2 from this wallet at creation and the market returns it at
+ * settlement; it is excluded from `distributable` and never dilutes a payout.
+ *
+ * Do NOT set this to 0 until Web App lib/payout.ts stops hardcoding
+ * PROTOCOL_SEED = 1_000_000. Against a seedless market that code subtracts a
+ * seed that isn't there and OVER-quotes the payout — +25% on a thin pool, and a
+ * 1 USDC bet on an empty side displays $0. See R6-8 in
+ * audits/audit-september-2026-delta.md.
+ */
+const LAUNCH_SEED = 1_000_000n;
 
 const account = privateKeyToAccount(config.privateKey);
 
@@ -100,7 +118,7 @@ export async function countOpenMarkets(): Promise<number> {
 }
 
 /**
- * The factory pulls PROTOCOL_SEED * 2 from the caller via transferFrom, so the
+ * The factory pulls LAUNCH_SEED * 2 from the caller via transferFrom, so the
  * caller must have approved it first. Circle USDC on Base rejects exact-amount
  * approvals intermittently, hence max approval (per BUILD-SPEC.md).
  * Normally a genuine one-time cost — the threshold is never reached again.
@@ -228,7 +246,7 @@ export async function simulateDeploy(gameId: string): Promise<void> {
     address: config.factoryAddress,
     abi: factoryAbi,
     functionName: 'createMarket',
-    args: [gameId, 0n],
+    args: [gameId, 0n, LAUNCH_SEED],
     account: botAddress,
   });
 }
@@ -255,7 +273,7 @@ export async function deployMarket(
     address: config.factoryAddress,
     abi: factoryAbi,
     functionName: 'createMarket',
-    args: [gameId, oracleZ],
+    args: [gameId, oracleZ, LAUNCH_SEED],
     account: botAddress,
   });
 
@@ -263,7 +281,7 @@ export async function deployMarket(
     address: config.factoryAddress,
     abi: factoryAbi,
     functionName: 'createMarket',
-    args: [gameId, oracleZ],
+    args: [gameId, oracleZ, LAUNCH_SEED],
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({
