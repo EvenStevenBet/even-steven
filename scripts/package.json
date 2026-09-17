@@ -1,0 +1,16 @@
+{
+  "name": "even-steven-rehearsal",
+  "private": true,
+  "type": "module",
+  "description": "Base Sepolia live rehearsal harness for SportsbookMarket v1.10 / SportsbookFactory v1.5",
+  "scripts": {
+    "phase1": "node sepolia-rehearsal.mjs phase1",
+    "phase2": "node sepolia-rehearsal.mjs phase2"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "4.9.3",
+    "solc": "0.8.20",
+    "viem": "^2.21.0",
+    "dotenv": "^16.4.5"
+  }
+}

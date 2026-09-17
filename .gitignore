@@ -20,3 +20,8 @@ Thumbs.db
 *.key
 *.pem
 mnemonic.txt
+
+# rehearsal harness deps + local run state
+scripts/node_modules/
+scripts/sepolia-rehearsal-state.json
+scripts/*.log

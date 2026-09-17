@@ -173,12 +173,19 @@ Errors: `400` if `marketAddress` or `bettor` is missing or not a valid address.
 
 ### v2 note
 
-**`POST /api/bet` is not available on v1.** `placeBet()` records `msg.sender` as the bettor, so
-a server-side relay would require custodying agent funds — Even Steven does not do that.
-Non-custodial agent betting needs a `placeBetFor(address bettor, ...)` contract entry point,
-planned for v2 (1–2 weeks out). Until then, agents place bets themselves directly against the
-contract (see **Quick Start** above and **Placing a Bet** below) — the x402 endpoints above are
-read/quote only.
+**`POST /api/bet` is not available yet.** On the currently deployed v1.9 contract,
+`placeBet()` records `msg.sender` as the bettor, so a server-side relay would have to custody
+agent funds — Even Steven does not do that.
+
+The contract-side unlock is built: **`placeBetFor()` in SportsbookMarket v1.10**, which
+records the EIP-3009 *signer* as the bettor rather than the submitter. It is verified against
+a Base mainnet fork but **not yet deployed to mainnet**, and the write endpoint is built on
+top of it once it is. See **Non-Custodial Betting via `placeBetFor`** below for the
+integration shape — including two divergences from a vanilla x402 payload that will
+otherwise fail signature verification.
+
+Until then, agents place bets themselves directly against the contract (see **Quick Start**
+above and **Placing a Bet** below) — the x402 endpoints above are read/quote only.
 
 ---
 
@@ -344,6 +351,154 @@ market.placeBet(greaterThan, stake);
 ```
 
 Your `lockedZ` is the Z line at the moment your transaction is included in a block. Future bets do not affect your locked Z.
+
+---
+
+## Non-Custodial Betting via `placeBetFor` (v1.10 — NOT YET DEPLOYED)
+
+> **Status: built and verified against a Base mainnet fork, awaiting testnet rehearsal and
+> mainnet deploy.** The addresses in **Contract Addresses** below are still v1.9/v1.4, which
+> do **not** have this function. Do not integrate against it on mainnet yet.
+
+`placeBetFor` lets a **relay** submit a bet that **you** own. You sign an EIP-3009
+authorization for your stake; the relay pays the gas and submits the transaction; the
+contract records *you* as the bettor. The relay never holds your funds, and only you can
+claim your payout.
+
+```solidity
+struct Authorization {
+    uint256 validAfter;   // EIP-3009 validAfter  (unix seconds)
+    uint256 validBefore;  // EIP-3009 validBefore (unix seconds)
+    bytes32 nonce;        // MUST equal keccak256(abi.encode(salt, greaterThan))
+    bytes32 salt;         // your randomness
+    uint8   v;
+    bytes32 r;
+    bytes32 s;
+}
+
+market.placeBetFor(bettor, greaterThan, stake, auth);
+```
+
+**Anyone may call it.** There is deliberately no relay allowlist — the only authorization
+that counts is your signature, which USDC itself verifies.
+
+### Two things that will silently break a naive x402 integration
+
+**1. Sign `ReceiveWithAuthorization`, not `TransferWithAuthorization`.**
+
+x402's `exact` EVM scheme uses `transferWithAuthorization`. Even Steven uses
+**`receiveWithAuthorization`**, which USDC only lets the payee redeem. This is deliberate:
+`transferWithAuthorization` can be submitted by anyone who sees it, so an observer could
+redeem your authorization straight at USDC — your funds would land in the market with **no
+bet recorded** and the spent nonce would make the real `placeBetFor` revert.
+
+**2. The nonce is structured, not random.**
+
+```
+nonce = keccak256(abi.encode(salt, greaterThan))
+```
+
+The EIP-3009 signature covers `(from, to, value, validAfter, validBefore, nonce)` — it does
+**not** cover which side of the line you are betting. Without this binding, a relay could
+take an authorization you signed for "greater than" and place it on "less than or equal",
+taking the other side against you. Encoding the side into the signed nonce makes your
+signature a commitment to one side.
+
+A vanilla random x402 nonce is rejected with `BadAuthorizationNonce()` — a distinct custom
+error, not a generic signature failure.
+
+> **`salt` must be unique per bet, globally — not merely per market.** USDC tracks spent
+> nonces per `(authorizer, nonce)` across the whole token, not per recipient. Reusing a
+> `salt` for the same side on a *different* market produces the same nonce and is rejected
+> as already used.
+
+### Signing (viem)
+
+```ts
+const domain = {
+  name: 'USD Coin',
+  version: '2',                 // NOT '1' and NOT '2.2' — verified on-chain
+  chainId: 8453,
+  verifyingContract: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // the PROXY address
+}
+
+const types = {
+  ReceiveWithAuthorization: [
+    { name: 'from',        type: 'address' },
+    { name: 'to',          type: 'address' },
+    { name: 'value',       type: 'uint256' },
+    { name: 'validAfter',  type: 'uint256' },
+    { name: 'validBefore', type: 'uint256' },
+    { name: 'nonce',       type: 'bytes32' },
+  ],
+}
+
+const fee   = stake * 200n / 10000n     // market.FEE_PERCENT()
+const value = stake + fee               // sign for stake + fee, in ONE authorization
+
+const salt  = crypto.getRandomValues(new Uint8Array(32))  // unique per bet
+const nonce = keccak256(encodeAbiParameters(
+  [{ type: 'bytes32' }, { type: 'bool' }], [salt, greaterThan]
+))
+
+const signature = await account.signTypedData({
+  domain, types, primaryType: 'ReceiveWithAuthorization',
+  message: { from: account.address, to: marketAddress, value,
+             validAfter: 0n, validBefore, nonce },
+})
+```
+
+Sign for **`stake + fee`** in a single authorization. The full amount is pulled into the
+market, the fee is swept to the market owner in the same transaction, and only the stake
+enters the pool — exactly as in `placeBet()`.
+
+### Failure modes
+
+Errors raised by the market are custom errors and decode by name from the ABI:
+
+| Error | Meaning | Retry? |
+|---|---|---|
+| `BadAuthorizationNonce()` | Nonce is not `keccak256(salt, greaterThan)` — usually a random x402 nonce, or a relay trying to flip your side | Re-sign with the correct derivation |
+| `InvalidBettor()` | `bettor` was the zero address | Fix the call |
+| `BettingIsClosed()` | Betting has closed | Switch markets |
+| `MarketEnded()` | Settled or canceled | Switch markets |
+| `BelowMinBet()` | Stake under 1 USDC | Raise the stake |
+| `MarketFull()` | 1000-bet cap reached | Switch markets |
+| `FeeTransferFailed()` | Market owner cannot receive USDC | Do not retry; report |
+
+Failures originating inside USDC surface as **revert strings**, not custom errors — match
+on the text:
+
+| String | Meaning | Retry? |
+|---|---|---|
+| `FiatTokenV2: invalid signature` | Bad signature, or a parameter that doesn't match what you signed (commonly a `stake` whose `stake + fee` differs from the signed `value`) | Re-sign |
+| `FiatTokenV2: authorization is expired` | `validBefore` has passed | Re-sign with a new window |
+| `FiatTokenV2: authorization is not yet valid` | `validAfter` is in the future | Wait |
+| `FiatTokenV2: authorization is used or canceled` | Nonce already spent — usually a reused `salt` | Re-sign with a fresh salt |
+| `ERC20: transfer amount exceeds balance` | Insufficient USDC for `stake + fee` | Top up |
+| `Blacklistable: account is blacklisted` | Circle has blacklisted the address | Do not retry |
+| `Pausable: paused` | Market is paused | Retry later |
+
+### Claiming
+
+> **You need native ETH to claim.** Placing a bet through `placeBetFor` is gasless for you —
+> the relay pays the gas, you only sign. **Claiming is not.** `claimPayout()` is a direct
+> call from your own address, so an agent funded purely in USDC can enter a position and
+> then be unable to collect its winnings. Keep a small ETH balance on Base for this. There
+> is no relayed-claim entry point in v1.10; the 90-day `CLAIM_TIMEOUT` gives you time to
+> acquire gas, and a `claimPayoutFor` is a v3 candidate.
+
+You claim your own payout directly — the relay is not involved and cannot claim for you:
+
+```solidity
+market.claimPayout(betId);          // single
+market.claimPayouts([id1, id2]);    // batch (v1.10) — reverts if any id is already claimed
+market.claimAllPayouts();           // everything you hold in this market
+```
+
+`claimPayouts()` is atomic and strict: an already-claimed, non-winning, out-of-range or
+someone-else's id reverts the whole batch and claims nothing. `claimAllPayouts()` is the
+lenient variant — it skips what it cannot claim.
 
 ---
 
