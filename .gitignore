@@ -25,3 +25,4 @@ mnemonic.txt
 scripts/node_modules/
 scripts/sepolia-rehearsal-state.json
 scripts/*.log
+scripts/mainnet-deploy-state.json
