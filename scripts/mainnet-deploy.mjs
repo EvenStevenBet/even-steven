@@ -36,7 +36,34 @@ if (fs.existsSync(ENVFILE)) dotenv.config({ path: ENVFILE })
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const OO   = '0x2aBf1Bd76655de80eDB3086114315Eec75AF500c'
 const PROD = '0x6cF0A0b5282409E24dC35e2c1834f9111315603B'
-const RPC  = process.env.MAINNET_RPC || 'https://mainnet.base.org'
+/**
+ * RPC selection, in order: MAINNET_RPC > ALCHEMY_RPC_URL > ALCHEMY_KEY > public.
+ *
+ * The public endpoints are a last resort, not a default. During the Bills/Lions
+ * settlement run on 2026-09-17 all four failed in different ways:
+ *   base-rpc.publicnode.com  refuses eth_getTransactionReceipt as an "archive
+ *                            request" — the write lands, then the script dies
+ *                            reading its own receipt and reports false failure
+ *   mainnet.base.org         "over rate limit" mid-run; eth_getLogs capped at 2000
+ *   base.drpc.org            "Unknown block" on a pinned read moments after a
+ *                            confirmed transaction
+ *   1rpc.io/base             eth_getLogs capped at 50 blocks
+ *
+ * NOTE on eth_getLogs: the project's Alchemy account is on the Free tier, which
+ * caps getLogs at a 10-BLOCK range — narrower than every public endpoint above.
+ * Nothing in these scripts or the bot uses getLogs (events are decoded from
+ * transaction receipts), so this does not bite here, but do not add log scanning
+ * against this endpoint without checking the tier first.
+ */
+function resolveRpc() {
+  if (process.env.MAINNET_RPC) return process.env.MAINNET_RPC
+  if (process.env.ALCHEMY_RPC_URL) return process.env.ALCHEMY_RPC_URL
+  if (process.env.ALCHEMY_KEY) return 'https://base-mainnet.g.alchemy.com/v2/' + process.env.ALCHEMY_KEY
+  console.warn('  WARNING: no ALCHEMY_RPC_URL / ALCHEMY_KEY set — falling back to a public RPC.')
+  console.warn('  Public endpoints failed four different ways during the v1.10 launch; see resolveRpc().')
+  return 'https://mainnet.base.org'
+}
+const RPC  = resolveRpc()
 const LAUNCH_SEED = 1000000n                       // 1 USDC/side, Option D
 const EXPECTED = { MarketDeployer: 17650, SportsbookFactory: 8048, SportsbookMarket: 16254 }
 const MARKET_CREATED_TOPIC0 = '0xb0986a0038b9a2afc3b9dc7e400ddeb31ff547737cf738390752e5e6eba767a5'
