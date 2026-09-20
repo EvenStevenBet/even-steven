@@ -21,7 +21,7 @@ NFL-2026-08-20-HOME-Chargers-AWAY-49ers,NFL,Chargers,49ers,2026-08-21T02:00:00Z,
 NFL-2026-08-21-HOME-Steelers-AWAY-Jets,NFL,Steelers,Jets,2026-08-21T23:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-21-HOME-Jaguars-AWAY-Panthers,NFL,Jaguars,Panthers,2026-08-21T23:30:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-21-HOME-Broncos-AWAY-Packers,NFL,Broncos,Packers,2026-08-22T01:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
-NFL-2026-08-22-HOME-Lions-AWAY-Commanders,NFL,Lions,Commanders,2026-08-22T16:00:00Z,open,0x8f73BCd155beEc2b2EA3AD042EB3Ea6936ad1B89,,2026-08-18T12:00:00Z,preseason wk2,yes
+NFL-2026-08-22-HOME-Lions-AWAY-Commanders,NFL,Lions,Commanders,2026-08-22T16:00:00Z,refund,0x8f73BCd155beEc2b2EA3AD042EB3Ea6936ad1B89,,2026-08-18T12:00:00Z,triggerRefund NOT yet called; 0 bettor stakes, seed only,yes
 NFL-2026-08-22-HOME-Browns-AWAY-Bills,NFL,Browns,Bills,2026-08-22T17:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-22-HOME-Colts-AWAY-Falcons,NFL,Colts,Falcons,2026-08-22T17:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-22-HOME-Vikings-AWAY-Ravens,NFL,Vikings,Ravens,2026-08-22T17:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
@@ -31,7 +31,7 @@ NFL-2026-08-22-HOME-Bengals-AWAY-Bears,NFL,Bengals,Bears,2026-08-22T23:00:00Z,co
 NFL-2026-08-22-HOME-Patriots-AWAY-Eagles,NFL,Patriots,Eagles,2026-08-22T23:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-22-HOME-Buccaneers-AWAY-Chiefs,NFL,Buccaneers,Chiefs,2026-08-22T23:30:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
 NFL-2026-08-22-HOME-Cardinals-AWAY-Cowboys,NFL,Cardinals,Cowboys,2026-08-23T02:00:00Z,coming_soon,,,2026-08-18T12:00:00Z,preseason wk2,
-NFL-2026-08-23-HOME-Titans-AWAY-Seahawks,NFL,Titans,Seahawks,2026-08-24T00:00:00Z,open,0xf2f5963b770371Dd9ca796E40cb7d000734780Bc,,2026-08-18T12:00:00Z,preseason wk2,yes
+NFL-2026-08-23-HOME-Titans-AWAY-Seahawks,NFL,Titans,Seahawks,2026-08-24T00:00:00Z,refund,0xf2f5963b770371Dd9ca796E40cb7d000734780Bc,,2026-08-18T12:00:00Z,triggerRefund NOT yet called; 3 USDC bettor stakes stranded,yes
 NFL-2026-08-27-HOME-Bills-AWAY-Steelers,NFL,Bills,Steelers,2026-08-27T23:00:00Z,coming_soon,,,2026-08-25T12:00:00Z,preseason wk3,
 NFL-2026-08-27-HOME-Browns-AWAY-Patriots,NFL,Browns,Patriots,2026-08-28T00:00:00Z,coming_soon,,,2026-08-25T12:00:00Z,preseason wk3,
 NFL-2026-08-27-HOME-Raiders-AWAY-49ers,NFL,Raiders,49ers,2026-08-28T00:00:00Z,coming_soon,,,2026-08-25T12:00:00Z,preseason wk3,
@@ -52,7 +52,7 @@ NFL-2026-08-29-HOME-Titans-AWAY-Bears,NFL,Titans,Bears,2026-08-29T22:00:00Z,comi
 ,,,,,,,,,,
 ,,,,,,,,,,
 NFL-2026-09-09-HOME-Seahawks-AWAY-Patriots,NFL,Seahawks,Patriots,2026-09-10T00:20:00Z,coming_soon,,,2026-09-08T12:00:00Z,week 1,
-NFL-2026-09-10-HOME-Rams-AWAY-49ers,NFL,Rams,49ers,2026-09-11T00:35:00Z,closed,0xB8c9fcc36116D56D73e5DB75CBF8ba3af63B5c41,,2026-09-07T00:00:00Z,week 1,yes
+NFL-2026-09-10-HOME-Rams-AWAY-49ers,NFL,Rams,49ers,2026-09-11T00:35:00Z,refund,0xB8c9fcc36116D56D73e5DB75CBF8ba3af63B5c41,,2026-09-07T00:00:00Z,week 1; never settled; triggerRefund NOT called; 3 USDC bettor stakes stranded,yes
 NFL-2026-09-13-HOME-Panthers-AWAY-Bears,NFL,Panthers,Bears,2026-09-13T17:00:00Z,coming_soon,,,2026-09-08T12:00:00Z,week 1,
 NFL-2026-09-13-HOME-Bengals-AWAY-Buccaneers,NFL,Bengals,Buccaneers,2026-09-13T17:00:00Z,coming_soon,,,2026-09-08T12:00:00Z,week 1,
 NFL-2026-09-13-HOME-Lions-AWAY-Saints,NFL,Lions,Saints,2026-09-13T17:00:00Z,coming_soon,,,2026-09-08T12:00:00Z,week 1,
@@ -327,4 +327,4 @@ NFL-2027-01-10-HOME-Commanders-AWAY-Cowboys,NFL,Commanders,Cowboys,2027-01-10T18
 
 
 
-NFL-2026-TEST-HOME-Chiefs-AWAY-Eagles,NFL,Chiefs,Eagles,2026-09-13T23:59:00Z,open,0x4C67df3DDAFF55c8566417c2512A659D850c441C,0,2026-09-12T00:00:00Z,test market,yes
+NFL-2026-TEST-HOME-Chiefs-AWAY-Eagles,NFL,Chiefs,Eagles,2026-09-13T23:59:00Z,cancelled,0x4C67df3DDAFF55c8566417c2512A659D850c441C,0,2026-09-12T00:00:00Z,cancelMarket called; 5 USDC refunds claimable,yes
