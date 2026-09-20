@@ -72,6 +72,8 @@ const M = parseAbi([
   'function bettingClosedAt() view returns (uint256)', 'function owner() view returns (address)',
   'function getSettlementBond() view returns (uint256)', 'function cachedWinningStakes() view returns (uint256)',
   'function closeBetting()', 'function requestSettlement(int256)', 'function executeSettlement()',
+  'function triggerRefund()', 'function canTriggerRefund() view returns (bool)',
+  'event RefundTriggered(address indexed by)',
   'event BettingClosed(uint256 timestamp)',
   'event SettlementRequested(bytes32 assertionId, int256 proposedSpread, address asserter)',
   'event MarketSettled(int256 indexed finalSpread, bool refundMode, bool viaOracle)',
@@ -191,9 +193,64 @@ async function executeSettlement() {
   console.log('  market holds', f(bal), 'vs distributable', f(tP - sT), bal === tP - sT ? '(seed returned OK)' : '')
 }
 
+/**
+ * Signer for triggerRefund ONLY.
+ *
+ * triggerRefund() is deliberately permissionless: the contract lets anyone call
+ * it once REFUND_TIMEOUT has passed, precisely so bettors are not dependent on
+ * the operator staying alive. The caller gains nothing — refundMode just flips,
+ * and protocolSeedTotal goes to owner(), not to msg.sender. So the signer's
+ * identity is irrelevant here, unlike every other write in this file, which
+ * stays locked to the production wallet.
+ *
+ * Order: REFUND_SIGNER_KEY > MAINNET_PRIVATE_KEY > SEPOLIA_PRIVATE_KEY (which
+ * despite its name holds mainnet ETH on this project).
+ */
+function refundWallet() {
+  const k = (process.env.REFUND_SIGNER_KEY || process.env.MAINNET_PRIVATE_KEY ||
+             process.env.SEPOLIA_PRIVATE_KEY || '').trim()
+  if (!k) die('no signing key available (REFUND_SIGNER_KEY / MAINNET_PRIVATE_KEY / SEPOLIA_PRIVATE_KEY)')
+  if (!/^0x[0-9a-fA-F]{64}$/.test(k)) die('signing key is malformed')
+  const a = privateKeyToAccount(k)
+  console.log('signer :', a.address, '(triggerRefund is permissionless — identity does not affect the outcome)')
+  return createWalletClient({ account: a, chain: base, transport: http(RPC, { timeout: 120000 }) })
+}
+
+/**
+ * triggerRefund() — the 7-day backstop. Permissionless: anyone may call it once
+ * REFUND_TIMEOUT has elapsed since betting closed and the market never settled.
+ * Flips refundMode so every bettor can reclaim their full stake (no fee taken),
+ * and returns the protocol seed to owner(). Does NOT push funds to bettors —
+ * they still claim individually.
+ */
+async function triggerRefund() {
+  if (!process.argv.includes('--confirm')) die('refusing without --confirm')
+  if (await r('settled')) die('market is settled — refund not applicable')
+  if (await r('canceled')) die('market is already canceled/refunded')
+  if (!(await r('canTriggerRefund'))) die('canTriggerRefund() is false — timeout not reached, or betting still open')
+
+  const tP = await r('totalPool'), sT = await r('protocolSeedTotal')
+  console.log('market :', MARKET)
+  console.log('gameId :', await r('gameId'))
+  console.log('bettor stakes to unlock:', f(tP - sT), ' seed returning to owner:', f(sT))
+
+  const w = refundWallet()
+  const h = await w.writeContract({ address: MARKET, abi: M, functionName: 'triggerRefund' })
+  console.log('triggerRefund tx:', h)
+  const rc = await pub.waitForTransactionReceipt({ hash: h })
+  if (rc.status !== 'success') die('triggerRefund reverted')
+  const ev = parseEventLogs({ abi: M, logs: rc.logs }).find(l => l.eventName === 'RefundTriggered')
+  console.log('  status:', rc.status, ' block:', rc.blockNumber, ' gas:', rc.gasUsed)
+  if (ev) console.log('  RefundTriggered(by=' + ev.args.by + ')')
+  await untilState('refundMode visible', () => r('refundMode'), v => v === true)
+  console.log('  canceled  :', await r('canceled'))
+  console.log('  refundMode:', await r('refundMode'), '-> every bettor can now claim their full stake')
+}
+
 const cmd = process.argv[2]
 if (cmd === 'state') await state()
 else if (cmd === 'close') await close()
 else if (cmd === 'request-settlement') await requestSettlement()
 else if (cmd === 'execute-settlement') await executeSettlement()
-else { console.error('usage: market-ops.mjs state|close|request-settlement <spread>|execute-settlement'); process.exit(1) }
+else if (cmd === 'trigger-refund') await triggerRefund()
+else { console.error('usage: market-ops.mjs state|close|request-settlement <spread>|execute-settlement|trigger-refund'); process.exit(1) }
