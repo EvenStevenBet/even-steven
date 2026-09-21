@@ -1,0 +1,19 @@
+{
+  "name": "even-steven-fork-tests",
+  "private": true,
+  "type": "module",
+  "description": "Differential + new-behaviour fork tests: SportsbookMarket v1.10 vs v1.11 on a pinned Base mainnet fork",
+  "scripts": {
+    "node": "hardhat node",
+    "differential": "node run.mjs differential",
+    "new": "node run.mjs new",
+    "all": "node run.mjs all"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "4.9.3",
+    "dotenv": "16.4.5",
+    "hardhat": "2.22.17",
+    "solc": "0.8.20",
+    "viem": "2.21.54"
+  }
+}

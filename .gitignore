@@ -30,3 +30,9 @@ scripts/node_modules/
 scripts/sepolia-rehearsal-state.json
 scripts/*.log
 scripts/mainnet-deploy-state.json
+
+# fork-test harness deps and local artifacts (the harness itself IS committed)
+scripts/fork-tests/node_modules/
+scripts/fork-tests/artifacts/
+scripts/fork-tests/cache/
+scripts/fork-tests/*.log
