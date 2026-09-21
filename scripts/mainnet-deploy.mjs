@@ -25,13 +25,15 @@ import { createPublicClient, createWalletClient, http, parseAbi, keccak256, stri
          parseEventLogs, formatUnits, formatEther, getAddress, padHex, toEventSelector } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base } from 'viem/chains'
-import dotenv from 'dotenv'
+import { loadEnv, envSearchList } from './env-resolve.mjs'
 
 const HERE      = path.dirname(fileURLToPath(import.meta.url))
 const CONTRACTS = path.resolve(HERE, '../contracts')
 const STATE     = path.resolve(HERE, 'mainnet-deploy-state.json')
-const ENVFILE   = path.resolve(HERE, '.env')
-if (fs.existsSync(ENVFILE)) dotenv.config({ path: ENVFILE })
+// Same env resolution as every other script here: $EVEN_STEVEN_ENV, then
+// ~/.even-steven/.env, then scripts/.env. Key material must not sit under
+// ~/Desktop, which is iCloud-synced.
+const ENVFILE   = loadEnv(HERE) || ('(none found; looked in:\n    ' + envSearchList(HERE) + ')')
 
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const OO   = '0x2aBf1Bd76655de80eDB3086114315Eec75AF500c'
@@ -135,7 +137,7 @@ function compile() {
     die('solc is ' + solc.version() + ', plan requires 0.8.20+commit.a1b79de6')
   const out = JSON.parse(solc.compile(JSON.stringify({
     language: 'Solidity', sources,
-    settings: { optimizer: { enabled: true, runs: 1 }, evmVersion: 'shanghai',
+    settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'shanghai',
                 outputSelection: { '*': { '*': ['evm.bytecode.object', 'evm.deployedBytecode.object', 'abi'] } } }
   }), { import: findImport }))
   const errs = (out.errors || []).filter(e => e.severity === 'error')
@@ -146,7 +148,7 @@ function compile() {
       if (c.evm.bytecode.object)
         arts[n] = { abi: c.abi, bytecode: '0x' + c.evm.bytecode.object, size: c.evm.deployedBytecode.object.length / 2 }
 
-  console.log('  solc ' + solc.version() + ', optimizer on runs=1, EVM shanghai')
+  console.log('  solc ' + solc.version() + ', optimizer on runs=200, EVM shanghai')
   let ok = true
   for (const [n, want] of Object.entries(EXPECTED)) {
     const got = arts[n]?.size

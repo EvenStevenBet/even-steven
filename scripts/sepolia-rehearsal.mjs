@@ -44,16 +44,16 @@ import { createPublicClient, createWalletClient, http, parseAbi, keccak256, stri
          encodeAbiParameters, parseEventLogs, formatUnits, getAddress, padHex } from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { baseSepolia } from 'viem/chains'
-import dotenv from 'dotenv'
+import { loadEnv, envSearchList } from './env-resolve.mjs'
 
 const HERE      = path.dirname(fileURLToPath(import.meta.url))
 const CONTRACTS = path.resolve(HERE, '../contracts')
 const STATE     = path.resolve(HERE, 'sepolia-rehearsal-state.json')
-const ENVFILE   = path.resolve(HERE, '.env')
-
-// Load .env from THIS directory, not the cwd, so the script works from anywhere.
-// Real env vars already set take precedence (dotenv does not override by default).
-if (fs.existsSync(ENVFILE)) dotenv.config({ path: ENVFILE })
+// Resolve the env file the same way every script in this repo does:
+// $EVEN_STEVEN_ENV, then ~/.even-steven/.env, then scripts/.env. Key material
+// should not live under ~/Desktop, which is iCloud-synced. Real env vars already
+// set take precedence (dotenv does not override by default).
+const ENVFILE   = loadEnv(HERE)
 
 const USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
 const OO   = '0x0F7fC5E6482f096380db6158f978167b57388deE'
@@ -132,9 +132,10 @@ const chk = (l, c, d = '') => { c ? (pass++, console.log('  PASS  ' + l + (d ? '
 
 if (!process.env.SEPOLIA_PRIVATE_KEY) {
   console.error('SEPOLIA_PRIVATE_KEY is required.')
-  console.error(fs.existsSync(ENVFILE)
-    ? '  ' + ENVFILE + ' exists but does not define SEPOLIA_PRIVATE_KEY.'
-    : '  No .env found at ' + ENVFILE + ' — create it, or export the variable.')
+  console.error(ENVFILE
+    ? '  ' + ENVFILE + ' was loaded but does not define SEPOLIA_PRIVATE_KEY.'
+    : '  No env file found. Looked in:\n    ' + envSearchList(HERE) +
+      '\n  Create one of those, or export the variable.')
   process.exit(1)
 }
 {
@@ -177,7 +178,7 @@ function compile() {
     return { error: 'not found: ' + imp + ' (looked in: ' + candidates.join(', ') + ')' }
   }
   const input = { language: 'Solidity', sources, settings: {
-    optimizer: { enabled: true, runs: 1 }, evmVersion: 'shanghai',
+    optimizer: { enabled: true, runs: 200 }, evmVersion: 'shanghai',
     outputSelection: { '*': { '*': ['evm.bytecode.object', 'evm.deployedBytecode.object', 'abi'] } } } }
   const out = JSON.parse(solc.compile(JSON.stringify(input), { import: findImport }))
   const errs = (out.errors || []).filter(e => e.severity === 'error')
