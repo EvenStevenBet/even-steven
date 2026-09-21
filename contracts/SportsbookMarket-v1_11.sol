@@ -9,6 +9,10 @@
 //     settlement payout parameters. PayoutClaimed and MarketSettled are unchanged.
 //   - _requireNotPaused()/_checkOwner() overridden: MarketPaused()/NotOwner() custom
 //     errors replace OpenZeppelin's require-strings. unpause() is unchanged.
+//   - placeBetForWithSignature(address,bool,uint256,AuthorizationBytes): the same
+//     relayed bet entry point for signers whose signature is not 65-byte ECDSA —
+//     smart-contract wallets (ERC-1271) and EIP-7702-delegated accounts. placeBetFor
+//     is unchanged and stays the path for plain EOAs.
 //
 // CHANGES FROM v1.9 (carried):
 //   - placeBetFor(): non-custodial agent betting via EIP-3009
@@ -115,6 +119,19 @@ interface IEIP3009 {
         bytes32 r,
         bytes32 s
     ) external;
+
+    /// @dev The bytes-signature overload (FiatTokenV2_2). USDC verifies an EOA
+    ///      signature with ecrecover and a contract signer through ERC-1271, so a
+    ///      signature that is not 65-byte ECDSA can only be redeemed through this one.
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes calldata signature
+    ) external;
 }
 
 contract SportsbookMarket is Ownable, ReentrancyGuard, Pausable {
@@ -191,6 +208,18 @@ contract SportsbookMarket is Ownable, ReentrancyGuard, Pausable {
         uint8   v;
         bytes32 r;
         bytes32 s;
+    }
+
+    /// @notice EIP-3009 authorization whose signature is opaque bytes, for
+    ///         placeBetForWithSignature(). Same fields as Authorization, except the
+    ///         signature is not split into v/r/s — a contract wallet's signature has
+    ///         no such decomposition.
+    struct AuthorizationBytes {
+        uint256 validAfter;   // EIP-3009 validAfter  (unix seconds)
+        uint256 validBefore;  // EIP-3009 validBefore (unix seconds)
+        bytes32 nonce;        // MUST equal keccak256(abi.encode(salt, greaterThan))
+        bytes32 salt;         // bettor-chosen; nonce MUST equal keccak256(salt, greaterThan)
+        bytes   signature;    // EOA: abi.encodePacked(r,s,v). Contract wallet: its own format.
     }
 
     struct Bet {
@@ -379,6 +408,28 @@ contract SportsbookMarket is Ownable, ReentrancyGuard, Pausable {
             auth.v, auth.r, auth.s
         );
 
+        _recordBet(bettor, greaterThan, stake, fee);
+    }
+
+    /**
+     * @notice placeBetFor for signers whose signature is not 65-byte ECDSA: smart-contract
+     *         wallets (verified by USDC via ERC-1271) and EIP-7702-delegated accounts.
+     *         Identical checks to placeBetFor; the signature is passed to USDC as opaque
+     *         bytes and USDC does all verification. EOAs may use either function.
+     * @dev Same R6-2 rule: auth.nonce must equal keccak256(abi.encode(auth.salt,
+     *      greaterThan)), else BadAuthorizationNonce(). Bettor is recorded as owner; funds
+     *      move bettor -> market only.
+     */
+    function placeBetForWithSignature(
+        address bettor, bool greaterThan, uint256 stake, AuthorizationBytes calldata auth
+    ) external nonReentrant whenNotPaused {
+        if (bettor == address(0)) revert InvalidBettor();
+        if (auth.nonce != keccak256(abi.encode(auth.salt, greaterThan))) revert BadAuthorizationNonce();
+        uint256 fee = _preBet(stake);
+        IEIP3009(address(usdc)).receiveWithAuthorization(
+            bettor, address(this), stake + fee,
+            auth.validAfter, auth.validBefore, auth.nonce, auth.signature
+        );
         _recordBet(bettor, greaterThan, stake, fee);
     }
 

@@ -177,8 +177,10 @@ function compile() {
     }
     return { error: 'not found: ' + imp + ' (looked in: ' + candidates.join(', ') + ')' }
   }
+  // runs=1 — this script reproduces the DEPLOYED v1.10/v1.5 build and must stay
+  // reproducible. v3 ships at runs=200; that lives in sepolia-rehearsal-v3.mjs.
   const input = { language: 'Solidity', sources, settings: {
-    optimizer: { enabled: true, runs: 200 }, evmVersion: 'shanghai',
+    optimizer: { enabled: true, runs: 1 }, evmVersion: 'shanghai',
     outputSelection: { '*': { '*': ['evm.bytecode.object', 'evm.deployedBytecode.object', 'abi'] } } } }
   const out = JSON.parse(solc.compile(JSON.stringify(input), { import: findImport }))
   const errs = (out.errors || []).filter(e => e.severity === 'error')
