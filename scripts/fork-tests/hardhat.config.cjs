@@ -11,8 +11,15 @@ if (!RPC) throw new Error('ALCHEMY_RPC_URL missing from scripts/.env')
 // against this block. Bump deliberately, never incidentally.
 const FORK_BLOCK = Number(process.env.FORK_BLOCK || 51588000)
 
+// Keep hardhat's fork cache OUT of the project tree. This repo lives under
+// ~/Desktop, which is an iCloud-synced folder: a 60 MB+ cache of small files
+// there puts fileproviderd/bird/cloudd into a permanent sync storm that starves
+// the node and makes the suite an order of magnitude slower.
+const CACHE_ROOT = process.env.HH_CACHE_DIR || path.join(require('os').tmpdir(), 'even-steven-fork-cache')
+
 module.exports = {
   solidity: '0.8.20',
+  paths: { cache: path.join(CACHE_ROOT, 'cache'), artifacts: path.join(CACHE_ROOT, 'artifacts') },
   networks: {
     hardhat: {
       chainId: 8453,
