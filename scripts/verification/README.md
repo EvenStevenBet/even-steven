@@ -1,8 +1,11 @@
 # BaseScan verification inputs — v1.10 / v1.5 (Base mainnet)
 
 Everything needed to verify all three contracts. Not submitted from this machine:
-no `BASESCAN_API_KEY` exists in the project, so this must be done through the
-BaseScan UI or with a key supplied separately.
+no `ETHERSCAN_API_KEY` exists in the project, so this must be done through the
+BaseScan UI or with a key supplied separately. (BaseScan verification now runs
+through Etherscan's unified multichain API/key system — the env var is
+`ETHERSCAN_API_KEY`, not `BASESCAN_API_KEY`, even though submission is still to
+BaseScan for a Base contract.)
 
 `standard-json-input.json` is a solc Standard JSON Input containing all 8 sources
 (3 project files + 5 OpenZeppelin 4.9.3 dependencies, keyed by the exact
