@@ -328,3 +328,4 @@ NFL-2027-01-10-HOME-Commanders-AWAY-Cowboys,NFL,Commanders,Cowboys,2027-01-10T18
 
 
 NFL-2026-TEST-HOME-Chiefs-AWAY-Eagles,NFL,Chiefs,Eagles,2026-09-13T23:59:00Z,cancelled,0x4C67df3DDAFF55c8566417c2512A659D850c441C,0,2026-09-12T00:00:00Z,cancelMarket called; 5 USDC refunds claimable,yes
+NFL-2026-MAINNET-TEST-HOME-Chiefs-AWAY-Eagles,NFL,Chiefs,Eagles,2026-09-07T03:00:00Z,settled,0x499a8260D7bdf24A981914A361c017289c5990B1,0,2026-09-05T22:44:05Z,v1.4 factory settlement rehearsal; finalSpread=7 viaOracle; production wallet bet both sides no bettor funds; 500 USDC bond confirmed to UMA OOV3 Sep 6 23:48 UTC; fully drained Sep 7,yes
