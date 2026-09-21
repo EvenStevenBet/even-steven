@@ -173,19 +173,17 @@ Errors: `400` if `marketAddress` or `bettor` is missing or not a valid address.
 
 ### v2 note
 
-**`POST /api/bet` is not available yet.** On the currently deployed v1.9 contract,
-`placeBet()` records `msg.sender` as the bettor, so a server-side relay would have to custody
-agent funds — Even Steven does not do that.
-
-The contract-side unlock is built: **`placeBetFor()` in SportsbookMarket v1.10**, which
-records the EIP-3009 *signer* as the bettor rather than the submitter. It is verified against
-a Base mainnet fork but **not yet deployed to mainnet**, and the write endpoint is built on
-top of it once it is. See **Non-Custodial Betting via `placeBetFor`** below for the
+**`POST /api/bet` is not available yet, but the contract-side unlock is live.**
+`placeBetFor()` in **SportsbookMarket v1.10** — deployed to Base mainnet — records the
+EIP-3009 *signer* as the bettor rather than the submitter, so a relay can submit on an
+agent's behalf without ever custodying funds. The write endpoint built on top of it is
+still in progress. See **Non-Custodial Betting via `placeBetFor`** below for the
 integration shape — including two divergences from a vanilla x402 payload that will
 otherwise fail signature verification.
 
-Until then, agents place bets themselves directly against the contract (see **Quick Start**
-above and **Placing a Bet** below) — the x402 endpoints above are read/quote only.
+Until the write endpoint ships, agents either call `placeBetFor` directly (see below) or
+place bets themselves against the contract (see **Quick Start** above and **Placing a
+Bet** below) — the x402 endpoints above remain read/quote only.
 
 ---
 
@@ -195,13 +193,19 @@ above and **Placing a Bet** below) — the x402 endpoints above are read/quote o
 
 | Contract | Address |
 |---|---|
-| SportsbookFactory v1.4 | `0xB09aD0b9B52E628328151505580be1A632326E0c` |
+| SportsbookFactory v1.5 | `0xf69d4c986bb9fa8177e74b8cb9e2c49f4200adbd` |
+| MarketDeployer v1.0 | `0xa88b73cff7187f84f5615e396c5bf34daeea1d70` *(holds SportsbookMarket v1.10 creation bytecode; pinned by v1.5 as an immutable at construction)* |
+| ~~SportsbookFactory v1.4~~ | ~~`0xB09aD0b9B52E628328151505580be1A632326E0c`~~ *(superseded by v1.5; markets it created still settle and claim normally)* |
 | ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — UMA identifier bug, use triggerRefund() on stranded markets)* |
 | ~~SportsbookFactory v1.2~~ | ~~`0x08BA5624107536d1CEA043B372978E7e9516E214`~~ *(retired)* |
 | USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |
 
-Deploy tx: [`0x2ec96b82ced224a4eefa68b7b75ae30f20bb1ec810c069d94efbeb00408f0d25`](https://basescan.org/tx/0x2ec96b82ced224a4eefa68b7b75ae30f20bb1ec810c069d94efbeb00408f0d25) — Basescan verified, Exact Match.
+All three v1.10/v1.5 contracts are verified on BaseScan (Standard-Json-Input, Exact Match).
+
+**`createMarket` signature changed in v1.5** — now `(string gameId, int256 oracleZ, uint256 protocolSeed)`,
+a breaking change from v1.4's `(gameId, oracleZ)`. This does not affect agents (only the
+factory owner/operator calls it), but note it if you're reading factory deploy logs.
 
 Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover active markets.
 
@@ -354,11 +358,7 @@ Your `lockedZ` is the Z line at the moment your transaction is included in a blo
 
 ---
 
-## Non-Custodial Betting via `placeBetFor` (v1.10 — NOT YET DEPLOYED)
-
-> **Status: built and verified against a Base mainnet fork, awaiting testnet rehearsal and
-> mainnet deploy.** The addresses in **Contract Addresses** below are still v1.9/v1.4, which
-> do **not** have this function. Do not integrate against it on mainnet yet.
+## Non-Custodial Betting via `placeBetFor` (v1.10 — LIVE on Base mainnet)
 
 `placeBetFor` lets a **relay** submit a bet that **you** own. You sign an EIP-3009
 authorization for your stake; the relay pays the gas and submits the transaction; the
@@ -716,5 +716,5 @@ These are not loopholes. They are the protocol working as designed — early liq
 
 ---
 
-*Even Steven v1.9 — September 2026*
-*Audited by Claude Opus, five rounds, March–June 2026, plus a delta audit (August 2026) covering the v1.9 UMA identifier fix. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
+*Even Steven v1.10 — September 2026*
+*Audited by Claude Opus, five rounds, March–June 2026 (round 5 covers the v1.8.1 taker-fee model), plus a delta audit (August 2026) covering the v1.9 UMA identifier fix. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*

@@ -310,7 +310,7 @@ Zero = tie.
 
 | Function | Access | Description |
 |---|---|---|
-| `createMarket(gameId, oracleZ)` | Owner/Operator | Deploy standard ±100 spread market |
+| `createMarket(gameId, oracleZ, protocolSeed)` | Owner/Operator | Deploy standard ±100 spread market (v1.5 — `protocolSeed` param is new, breaking vs. v1.4) |
 | `createMarketWithBounds(gameId, oracleZ, spreadMax, spreadMin)` | Owner/Operator | Deploy custom spread bounds market |
 | `setDefaultFee(newFeePercent)` | Owner | Update fee for all future markets |
 | `addOperator(address)` | Owner | Whitelist an operator to create markets |
@@ -360,13 +360,15 @@ No stake can be permanently locked. Every path terminates in either a settlement
 
 | Contract | Address |
 |---|---|
-| SportsbookFactory v1.4 | `0xB09aD0b9B52E628328151505580be1A632326E0c` |
+| SportsbookFactory v1.5 | `0xf69d4c986bb9fa8177e74b8cb9e2c49f4200adbd` |
+| MarketDeployer v1.0 | `0xa88b73cff7187f84f5615e396c5bf34daeea1d70` |
+| ~~SportsbookFactory v1.4~~ | ~~`0xB09aD0b9B52E628328151505580be1A632326E0c`~~ *(superseded by v1.5; markets it created still settle and claim normally)* |
 | ~~SportsbookFactory v1.3~~ | ~~`0x9E9C769aaCa509cD67Fbca2236dB26d8428a8027`~~ *(superseded — UMA identifier bug, use triggerRefund() on stranded markets)* |
 | ~~SportsbookFactory v1.2~~ | ~~`0x08BA5624107536d1CEA043B372978E7e9516E214`~~ *(retired)* |
 | USDC (Circle) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
 | UMA OOV3 | `0x2aBf1Bd76655de80eDB3086114315Eec75AF500c` |
 
-Deploy tx: [`0x2ec96b82ced224a4eefa68b7b75ae30f20bb1ec810c069d94efbeb00408f0d25`](https://basescan.org/tx/0x2ec96b82ced224a4eefa68b7b75ae30f20bb1ec810c069d94efbeb00408f0d25) — Basescan verified, Exact Match on factory and first market.
+All three v1.10/v1.5 contracts verified on BaseScan (Standard-Json-Input, Exact Match).
 
 Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover active markets.
 
@@ -382,9 +384,10 @@ Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover
 
 ## Technical Notes
 
-- Solidity 0.8.20, OpenZeppelin v4.9.3
-- Optimizer: enabled, 50 runs (200 runs exceeds EIP-170 bytecode limit for the factory)
-- EVM target: Paris
+- Solidity `0.8.20+commit.a1b79de6`, OpenZeppelin v4.9.3
+- Optimizer: enabled, runs=1 (this is the audited/deployed v1.10/v1.5 build — do not substitute
+  50 runs or Paris, which describe the superseded v1.8.1/v1.3 build)
+- EVM target: Shanghai
 - All USDC amounts in 6 decimal units: `1 USDC = 1000000 = 1e6`
 - `finalSpread` is a whole integer (e.g. `7`), not 4-decimal
 - `lockedZ` and `currentZ` are 4-decimal (e.g. `-35000` = `-3.5`)
@@ -392,6 +395,29 @@ Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover
 - The 2% protocol fee is charged on stake at placement and swept to the market owner; only the stake enters the pool
 - Maximum pool imbalance before Z clamp: 19:1
 - Z bounds: ±500.0000 (±5000000 in 4-decimal)
+
+### `data/markets.csv` status semantics
+
+Per `Web App/lib/markets.ts`, the `status` column is one of:
+
+| Status | Meaning |
+|---|---|
+| `coming_soon` | Not yet open for betting (sheet-managed, no on-chain market yet) |
+| `open` | Accepting bets |
+| `closed` | Game over, UMA assertion in its ~2-hour liveness window |
+| `settled` | Settlement finalized, payouts claimable |
+| `cancelled` | `cancelMarket()` called — full stake refund (no fee), 90-day claim window |
+| `refund` | 7-day safety-net backstop — market never settled, anyone can call `triggerRefund()` |
+| `expired` | Past its date with no market ever opened (sheet-managed) |
+
+`closed` and `open` are UMA-liveness/betting states, not final outcomes — do not conflate them
+with `settled`/`cancelled`/`refund`, which are terminal. Only `status === 'open'` (case-insensitive)
+is treated as currently accepting bets; everything else, including a blank cell, is not open.
+
+**This column is not self-maintaining.** The bot only writes a transition back to this CSV on
+its own actions (`runner.ts:97`); a market closed or settled by anything else — manual
+intervention, a refund cleanup pass like this one — leaves its row stale until someone updates
+it by hand. See `ROADMAP.md`.
 
 ---
 
@@ -403,7 +429,7 @@ Any agent can verify these numbers in under 60 seconds: open any sports market o
 
 ---
 
-*Protocol version: v1.9 — September 2026*
+*Protocol version: v1.10 — September 2026*
 *Audited by Claude Opus, five rounds, March–June 2026. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
 *Contact: evenstevenbet@gmail.com*
 *Website: evensteven.bet*
