@@ -47,6 +47,12 @@ export function compileSet(set, runs = 1) {
   const files = [set.market, set.deployer, set.factory]
   const sources = {}
   for (const f of files) sources[f] = { content: fs.readFileSync(path.join(CONTRACTS, f), 'utf8') }
+  // Mutation testing: MUTANT_SRC swaps in a modified copy of the v1.11 market from
+  // outside the repo, so a mutant is never written into contracts/ and can never be
+  // committed. Only ever applied to the v1.11 market.
+  if (process.env.MUTANT_SRC && set.market === V111.market) {
+    sources[set.market] = { content: fs.readFileSync(process.env.MUTANT_SRC, 'utf8') }
+  }
   const input = {
     language: 'Solidity',
     sources,
