@@ -9,6 +9,11 @@
  *   At the end the agent has been paid, and its ETH balance and transaction count
  *   are still exactly zero. Bet and claim, both gasless, both non-custodial.
  *
+ *   A THIRD bettor on the same market is an ERC-1271 smart-contract wallet betting
+ *   through placeBetForWithSignature, whose signature envelope is not 65-byte ECDSA
+ *   and therefore cannot travel through placeBetFor at all. Its owner key holds no
+ *   ETH and sends no transaction either. The relay claims for both winners.
+ *
  * Two phases, because UMA liveness is 7200s of real time and cannot be fast-forwarded:
  *   node sepolia-rehearsal-v3.mjs phase1     # deploy -> bets -> requestSettlement
  *   ...wait ~2 hours...
@@ -28,7 +33,8 @@
  *   env RELAY_PRIVATE_KEY     optional; a SEPARATE key that submits placeBetFor and
  *                             claimPayoutFor. Defaults to a generated key auto-funded
  *                             with ETH from the owner. It must NOT be the agent.
- *   env OPPOSING_PRIVATE_KEY  optional; defaults to the owner key.
+ *   env OPPOSING_PRIVATE_KEY  optional; defaults to the owner key. Takes the LESS side
+ *                             with 2x the stake, so both winners are paid exactly 2x.
  *   env STAKE_USDC            optional, default 1 (the contract minimum).
  *   env SEED_USDC             optional, default 1 — per-side protocol seed.
  *
@@ -66,8 +72,16 @@ const SEED  = BigInt(Math.round(Number(process.env.SEED_USDC  || '1') * 1e6))
 const f = v => formatUnits(v, 6)
 const b32 = s => padHex(stringToHex(s), { size: 32, dir: 'right' })
 
-// Measured at Gate 2b: solc 0.8.20+commit.a1b79de6, optimizer on, runs=200, shanghai.
-const EXPECTED_SIZE = { SportsbookMarket: 17700, MarketDeployer: 19091, SportsbookFactory: 8085 }
+// Settle at +11. The 19:1 pool-ratio clamp bounds Z within oracleZ +/- 137,247, so
+// with oracleZ = -35,000 the line can never exceed +102,247. A final spread of 11
+// (110,000 in 4-dp fixed point) therefore makes EVERY greater-side bet a winner and
+// EVERY less-side bet a loser, whenever each was placed. That keeps "exactly 2x"
+// meaningful with more than one winner.
+const FINAL_SPREAD = 11n
+
+// Measured at Gate 1c (Stage 2b, with placeBetForWithSignature):
+// solc 0.8.20+commit.a1b79de6, optimizer on, runs=200, evmVersion shanghai.
+const EXPECTED_SIZE = { SportsbookMarket: 18270, MarketDeployer: 19668, SportsbookFactory: 8085 }
 
 const onErr = e => {
   console.error('\n!! ERROR: ' + ((e.shortMessage || e.message || '').split('\n')[0]))
@@ -211,12 +225,26 @@ function compile() {
   return arts
 }
 
-/** Assert compiled sizes against the Gate 2b measurements before anything is deployed. */
+/** Compile the TEST-ONLY ERC-1271 wallet used as the third bettor. */
+function compileWallet() {
+  const file = 'TestSmartWallet.sol'
+  const src  = path.resolve(HERE, 'fork-tests/test-contracts', file)
+  const input = { language: 'Solidity', sources: { [file]: { content: fs.readFileSync(src, 'utf8') } },
+    settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'shanghai',
+                outputSelection: { '*': { '*': ['evm.bytecode.object', 'evm.deployedBytecode.object', 'abi'] } } } }
+  const out = JSON.parse(solc.compile(JSON.stringify(input)))
+  const errs = (out.errors || []).filter(e => e.severity === 'error')
+  if (errs.length) { errs.forEach(e => console.error(e.formattedMessage)); process.exit(1) }
+  const c = out.contracts[file].TestSmartWallet
+  return { abi: c.abi, bytecode: '0x' + c.evm.bytecode.object, size: c.evm.deployedBytecode.object.length / 2 }
+}
+
+/** Assert compiled sizes against the Gate 1c measurements before anything is deployed. */
 function assertSizes(arts) {
   console.log('  solc ' + solc.version() + ', optimizer on runs=200, EVM shanghai')
   for (const [n, want] of Object.entries(EXPECTED_SIZE)) {
     const got = arts[n].size
-    chk(n + ' compiled runtime == ' + want + ' bytes (Gate 2b measurement)', got === want, got + ' bytes')
+    chk(n + ' compiled runtime == ' + want + ' bytes (Gate 1c measurement)', got === want, got + ' bytes')
     chk(n + ' under EIP-170', got <= 24576, got + ' <= 24576')
   }
 }
@@ -237,10 +265,17 @@ async function phase1() {
 
   const bal = await pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [owner.account.address] })
   console.log('owner USDC balance:', f(bal))
-  // 100 USDC UMA bond (returned) + agent stake+fee (sent to the agent) + opposing
-  // stake+fee + the two-sided seed
-  const cost   = STAKE + (STAKE * 200n) / 10000n
-  const needed = 100000000n + cost * 2n + SEED * 2n
+  // 100 USDC UMA bond (returned to the asserter at settlement)
+  // + agent stake+fee          (transferred to the agent)
+  // + wallet stake+fee         (transferred to the ERC-1271 wallet)
+  // + opposing 2x stake + fee  (the owner takes the LESS side at twice the stake so
+  //                             both winners are paid exactly 2x)
+  // + two-sided protocol seed
+  const cost    = STAKE + (STAKE * 200n) / 10000n              // one bettor's outlay
+  const oppCost = STAKE * 2n + (STAKE * 2n * 200n) / 10000n     // the LESS side
+  const needed  = 100000000n + cost * 2n + oppCost + SEED * 2n
+  console.log('USDC required:', f(needed), '= bond ' + f(100000000n) + ' + agent ' + f(cost) +
+              ' + wallet ' + f(cost) + ' + opposing ' + f(oppCost) + ' + seed ' + f(SEED * 2n))
   if (bal < needed) { console.error('Insufficient testnet USDC. Need ~' + f(needed) + ', have ' + f(bal) +
     '\n(100 USDC of that is the UMA bond and is returned after settlement.)'); process.exit(1) }
 
@@ -323,6 +358,30 @@ async function phase1() {
       () => pub.getBalance({ address: relay.account.address }), v => v > 0n)
   }
 
+  // ---- third bettor: an ERC-1271 smart-contract wallet ----
+  // Its signature envelope is abi.encode(ownerIndex, ecdsaSig) — 192 bytes, which
+  // cannot be expressed as (v, r, s), so this bettor can only reach USDC through
+  // placeBetForWithSignature. The wallet's OWNER key holds no ETH and sends nothing.
+  const walletOwnerPk = generatePrivateKey(), walletOwner = privateKeyToAccount(walletOwnerPk)
+  const WART = compileWallet()
+  console.log('\ndeploying the ERC-1271 test wallet (owner key holds no ETH)...')
+  const wDeployRc = await pub.waitForTransactionReceipt({ hash: await owner.deployContract({
+    abi: WART.abi, bytecode: WART.bytecode, args: [walletOwner.address, 0] }) })
+  const smartWallet = wDeployRc.contractAddress
+  await waitForCode(smartWallet, 'TestSmartWallet')
+  console.log('  wallet ->', smartWallet, ' (tx ' + wDeployRc.transactionHash + ')')
+  console.log('    gas ' + wDeployRc.gasUsed + ', owner key ' + walletOwner.address)
+  chk('wallet.owner() == the wallet owner key',
+      getAddress(await readRetry(() => pub.readContract({ address: smartWallet, abi: WART.abi, functionName: 'owner' }), 'wallet owner'))
+      === getAddress(walletOwner.address))
+  await pub.waitForTransactionReceipt({ hash: await owner.writeContract({
+    address: USDC, abi: erc20, functionName: 'transfer', args: [smartWallet, cost] }) })
+  await untilState('wallet USDC funding visible',
+    () => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [smartWallet] }),
+    v => v >= cost)
+  console.log('  wallet funded with', f(cost), 'USDC and NO ETH')
+  await assertAgentUntouched(walletOwner.address, 'wallet owner key, after deployment')
+
   // ---- step 4: AGENT signs EIP-3009; RELAY submits placeBetFor ----
   const tokenName = await pub.readContract({ address: USDC, abi: erc20, functionName: 'name' })
   console.log('\nUSDC name() on this network:', JSON.stringify(tokenName))
@@ -371,6 +430,49 @@ async function phase1() {
                  (await readAt(USDC, erc20, 'balanceOf', [agent.address], A))
   chk('agent paid exactly stake + fee', -agentD === cost, f(-agentD))
 
+  // ---- step 4b: the wallet bets through placeBetForWithSignature ----
+  // Dry-run first. Base Sepolia's USDC exposes the bytes overload (pre-checked), but
+  // ERC-1271 acceptance is a separate property of the token build; find out with an
+  // eth_call before moving real funds rather than after.
+  const wSalt = keccak256(stringToHex('rehearsal-v3-wallet-' + Date.now()))
+  const wNonce = keccak256(encodeAbiParameters([{ type: 'bytes32' }, { type: 'bool' }], [wSalt, true]))
+  const wBlk = await pub.getBlock()
+  const wValidBefore = wBlk.timestamp + 7200n
+  const wSig = await walletOwner.signTypedData({ domain, types, primaryType: 'ReceiveWithAuthorization',
+    message: { from: smartWallet, to: market, value: cost, validAfter: 0n, validBefore: wValidBefore, nonce: wNonce } })
+  const wEnvelope = encodeAbiParameters([{ type: 'uint256' }, { type: 'bytes' }], [0n, wSig])
+  const wAuth = { validAfter: 0n, validBefore: wValidBefore, nonce: wNonce, salt: wSalt, signature: wEnvelope }
+  console.log('\nwallet signature: raw ECDSA ' + ((wSig.length - 2) / 2) + ' bytes -> ERC-1271 envelope ' +
+              ((wEnvelope.length - 2) / 2) + ' bytes (not expressible as v,r,s)')
+  {
+    const probe = await rawCall(market, encodeFunctionData({ abi: M, functionName: 'placeBetForWithSignature',
+      args: [smartWallet, true, STAKE, wAuth] }), relay.account.address)
+    if (!probe.ok) {
+      console.error('\n*** ABORT: placeBetForWithSignature would revert on this network.')
+      console.error('    raw revert data: ' + probe.data)
+      console.error('    ' + probe.message)
+      console.error('    No further transactions will be sent. The agent leg is unaffected;')
+      console.error('    re-run with the wallet step removed if Sepolia USDC lacks ERC-1271.')
+      process.exit(1)
+    }
+    chk('dry-run: placeBetForWithSignature would succeed on this network', true)
+  }
+  console.log('relay submitting placeBetForWithSignature (wallet owner signs, sends nothing)...')
+  const wBetRc = await pub.waitForTransactionReceipt({ hash: await relay.writeContract({
+    address: market, abi: M, functionName: 'placeBetForWithSignature', args: [smartWallet, true, STAKE, wAuth] }) })
+  const wBp = parseEventLogs({ abi: M, logs: wBetRc.logs }).find(l => l.eventName === 'BetPlaced')
+  console.log('  tx:', wBetRc.transactionHash, ' gas:', wBetRc.gasUsed, ' block:', wBetRc.blockNumber)
+  console.log('  BetPlaced decoded:', JSON.stringify({ bettor: wBp.args.bettor, betId: wBp.args.betId.toString(),
+    stake: f(wBp.args.stake), fee: f(wBp.args.fee), greaterThan: wBp.args.greaterThan, lockedZ: wBp.args.lockedZ.toString() }))
+  chk('wallet bet: msg.sender was the RELAY',
+      getAddress(wBetRc.from) === getAddress(relay.account.address), wBetRc.from)
+  chk('wallet bet: BetPlaced.bettor == the WALLET CONTRACT',
+      getAddress(wBp.args.bettor) === getAddress(smartWallet), wBp.args.bettor)
+  chk('wallet spent exactly stake + fee',
+      (await readRetry(() => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [smartWallet] }), 'wallet bal')) === 0n)
+  await assertAgentUntouched(walletOwner.address, 'wallet owner key, after the wallet bet')
+  await assertAgentUntouched(agent.address, 'agent, after the wallet bet')
+
   // ---- step 5: opposing bet, close, request settlement ----
   const opposing = process.env.OPPOSING_PRIVATE_KEY ? wal(process.env.OPPOSING_PRIVATE_KEY) : owner
   console.log('\nplacing opposing bet (' + (process.env.OPPOSING_PRIVATE_KEY ? 'separate wallet' : 'owner') + ', normal placeBet)...')
@@ -379,14 +481,15 @@ async function phase1() {
   await untilState('market allowance visible (opposing bet)',
     () => pub.readContract({ address: USDC, abi: erc20, functionName: 'allowance', args: [opposing.account.address, market] }),
     v => v > 0n)
+  // 2x the stake on the LESS side, so the two GREATER winners each receive exactly 2x.
   const oppRc = await pub.waitForTransactionReceipt({ hash: await opposing.writeContract({
-    address: market, abi: M, functionName: 'placeBet', args: [false, STAKE] }) })
+    address: market, abi: M, functionName: 'placeBet', args: [false, STAKE * 2n] }) })
   const oppBp = parseEventLogs({ abi: M, logs: oppRc.logs }).find(l => l.eventName === 'BetPlaced')
   const OB = oppRc.blockNumber
   await untilState('node caught up to opposing-bet block ' + OB, () => pub.getBlockNumber(), n => n >= OB)
   console.log('  opposing bet tx:', oppRc.transactionHash, ' block:', OB, ' betId:', oppBp.args.betId.toString())
 
-  console.log('\nclosing betting and requesting settlement (finalSpread = 0)...')
+  console.log('\nclosing betting and requesting settlement (finalSpread = ' + FINAL_SPREAD + ')...')
   await pub.waitForTransactionReceipt({ hash: await owner.writeContract({ address: market, abi: M, functionName: 'closeBetting' }) })
   await untilState('closeBetting visible',
     () => pub.readContract({ address: market, abi: M, functionName: 'bettingOpen' }), v => v === false)
@@ -396,7 +499,7 @@ async function phase1() {
     () => pub.readContract({ address: USDC, abi: erc20, functionName: 'allowance', args: [owner.account.address, market] }),
     v => v >= 100000000n)
   const reqRc = await pub.waitForTransactionReceipt({ hash: await owner.writeContract({
-    address: market, abi: M, functionName: 'requestSettlement', args: [0n] }) })
+    address: market, abi: M, functionName: 'requestSettlement', args: [FINAL_SPREAD] }) })
   const sr = parseEventLogs({ abi: M, logs: reqRc.logs }).find(l => l.eventName === 'SettlementRequested')
   console.log('  assertionId:', sr.args.assertionId)
   console.log('  tx:', reqRc.transactionHash, ' block:', reqRc.blockNumber)
@@ -411,6 +514,9 @@ async function phase1() {
   fs.writeFileSync(STATE, JSON.stringify({
     market, factory: factory.addr, deployer: deployer.addr, agentPk, relayPk,
     betId: bp.args.betId.toString(), oppBetId: oppBp.args.betId.toString(),
+    walletBetId: wBp.args.betId.toString(), smartWallet, walletOwnerPk,
+    walletAddr: smartWallet, walletOwnerAddr: walletOwner.address,
+    walletBetTx: wBetRc.transactionHash, walletDeployTx: wDeployRc.transactionHash,
     stake: STAKE.toString(), seed: SEED.toString(), cost: cost.toString(),
     betBlock: B.toString(), oppBlock: OB.toString(),
     deployerTx: deployer.tx, factoryTx: factory.tx, createTx: rc.transactionHash,
@@ -433,8 +539,11 @@ async function phase2() {
   assertSizes(arts)
   const relay = wal(st.relayPk)
   const AG = getAddress(st.agentAddr), RL = getAddress(st.relayAddr)
+  const WL = getAddress(st.walletAddr), WO = getAddress(st.walletOwnerAddr)
   console.log('market:', st.market, ' agent:', AG, ' relay:', RL)
+  console.log('wallet:', WL, ' wallet owner key:', WO)
   await assertAgentUntouched(AG, 'start of phase2')
+  await assertAgentUntouched(WO, 'wallet owner key, start of phase2')
 
   const now = Math.floor(Date.now() / 1000)
   const elapsed = now - st.requestedAt
@@ -527,9 +636,34 @@ async function phase2() {
   chk('realised payout == exactly 2x stake', pc.args.amount === BigInt(st.stake) * 2n, f(pc.args.amount))
   chk('bet is now marked claimed', (await at(st.market, M, 'getBet', [BigInt(st.betId)], CB)).claimed === true)
 
+  // ---- step 6b: the RELAY claims for the ERC-1271 WALLET as well ----
+  console.log('\nRELAY submitting claimPayoutFor(WALLET, [' + st.walletBetId + '])...')
+  const wClRc = await pub.waitForTransactionReceipt({ hash: await relay.writeContract({
+    address: st.market, abi: M, functionName: 'claimPayoutFor', args: [WL, [BigInt(st.walletBetId)]] }) })
+  const WCB = wClRc.blockNumber
+  await untilState('node caught up to wallet-claim block ' + WCB, () => pub.getBlockNumber(), n => n >= WCB)
+  const wcev = parseEventLogs({ abi: M, logs: wClRc.logs })
+  const wpc = wcev.find(l => l.eventName === 'PayoutClaimed')
+  const wbc = wcev.find(l => l.eventName === 'BetClaimed')
+  console.log('  tx:', wClRc.transactionHash, ' block:', WCB, ' gas:', wClRc.gasUsed)
+  console.log('  PayoutClaimed:', JSON.stringify({ bettor: wpc.args.bettor, amount: f(wpc.args.amount) }))
+  console.log('  BetClaimed   :', JSON.stringify({ bettor: wbc.args.bettor, betId: wbc.args.betId.toString(), payout: f(wbc.args.payout) }))
+  chk('wallet claim tx.from == RELAY', getAddress(wClRc.from) === RL, wClRc.from)
+  chk('PayoutClaimed.bettor == the WALLET CONTRACT', getAddress(wpc.args.bettor) === WL, wpc.args.bettor)
+  chk('BetClaimed.betId == the wallet bet', wbc.args.betId === BigInt(st.walletBetId), wbc.args.betId.toString())
+  const wPre  = await at(USDC, erc20, 'balanceOf', [WL], WCB - 1n)
+  const wPost = await at(USDC, erc20, 'balanceOf', [WL], WCB)
+  chk('WALLET USDC delta == +PayoutClaimed.amount', wPost - wPre === wpc.args.amount, f(wPost - wPre))
+  chk('wallet payout == exactly 2x stake', wpc.args.amount === BigInt(st.stake) * 2n, f(wpc.args.amount))
+  chk('market fully drained after BOTH claims',
+      (await at(USDC, erc20, 'balanceOf', [st.market], WCB)) === 0n)
+  console.log('\n  pinned-block balance table (wallet claim block ' + WCB + '):')
+  console.log('    WALLET    ' + f(wPre).padStart(12) + ' ' + f(wPost).padStart(12) + ' ' + f(wPost - wPre).padStart(12))
+
   // THE HEADLINE CLAIM
   console.log('\n  --- headline: bet AND claim with zero ETH and zero transactions ---')
   await assertAgentUntouched(AG, 'AFTER being paid')
+  await assertAgentUntouched(WO, 'wallet owner key, AFTER the wallet was paid')
 
   // ---- step 7: reconstruct the payout from logs alone ----
   const logsAll = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.betBlock), toBlock: CB })
@@ -564,6 +698,10 @@ async function phase2() {
             'claimPayoutFor', [AG, [99n]], ERRSEL.InvalidBetId)
   await neg('claimPayoutFor(loser,[oppBetId]) -> NoPayout',
             'claimPayoutFor', [getAddress(st.opposingAddr), [BigInt(st.oppBetId)]], ERRSEL.NoPayout)
+  await neg('repeat claimPayoutFor(WALLET,[walletBetId]) -> AlreadyClaimed',
+            'claimPayoutFor', [WL, [BigInt(st.walletBetId)]], ERRSEL.AlreadyClaimed)
+  await neg('claimPayoutFor(WALLET,[agent betId]) -> NotYourBet',
+            'claimPayoutFor', [WL, [BigInt(st.betId)]], ERRSEL.NotYourBet)
   await neg('non-owner closeBetting() -> NotOwner (C1)',
             'closeBetting', [], ERRSEL.NotOwner)
 
@@ -583,6 +721,8 @@ async function phase2() {
 
   st.claimTx = clRc.transactionHash; st.exTx = exTx; st.claimBlock = CB.toString()
   st.payout = pc.args.amount.toString(); st.settleBlock = settleBlock.toString()
+  st.walletClaimTx = wClRc.transactionHash; st.walletClaimBlock = WCB.toString()
+  st.walletPayout = wpc.args.amount.toString()
   fs.writeFileSync(STATE, JSON.stringify(st, null, 2))
   console.log('\n=== PHASE 2 SUMMARY === pass=' + pass + ' fail=' + fail)
   if (fail) process.exit(1)
@@ -599,9 +739,11 @@ async function verify() {
   const st = JSON.parse(fs.readFileSync(STATE, 'utf8'))
   const arts = compile(); const M = arts.SportsbookMarket.abi, F = arts.SportsbookFactory.abi
   const AG = getAddress(st.agentAddr), RL = getAddress(st.relayAddr), OW = getAddress(st.ownerAddr)
+  const WL = getAddress(st.walletAddr), WO = getAddress(st.walletOwnerAddr)
   const STK = BigInt(st.stake), SD = BigInt(st.seed), FEE = (STK * 200n) / 10000n
   console.log('market :', st.market)
   console.log('agent  :', AG, ' relay:', RL, ' owner:', OW)
+  console.log('wallet :', WL, ' wallet owner key:', WO)
 
   const at = (address, abi, functionName, args, blockNumber) =>
     readRetry(() => pub.readContract({ address, abi, functionName, args, blockNumber }), functionName)
@@ -680,11 +822,44 @@ async function verify() {
                  : (isWinner ? (bpLog.args.stake * sd.args.distributable) / sd.args.winningStakes : 0n)
   chk('payout computed from EVENTS ALONE == USDC received', fromLogs === agentDelta, f(fromLogs))
 
+  // --- the ERC-1271 wallet leg ---
+  const wCode = await pub.getCode({ address: WL })
+  chk('the wallet bettor is a CONTRACT', !!wCode && wCode !== '0x', ((wCode.length - 2) / 2) + ' bytes of code')
+  const wBetRc = await pub.getTransactionReceipt({ hash: st.walletBetTx })
+  const wBp = parseEventLogs({ abi: M, logs: wBetRc.logs }).find(l => l.eventName === 'BetPlaced')
+  chk('placeBetForWithSignature tx succeeded', wBetRc.status === 'success', wBetRc.status)
+  chk('wallet bet msg.sender was the RELAY', getAddress(wBetRc.from) === RL, wBetRc.from)
+  chk('BetPlaced.bettor is the WALLET CONTRACT', getAddress(wBp.args.bettor) === WL, wBp.args.bettor)
+  chk('wallet bet stake == stake (fee excluded)', wBp.args.stake === STK, f(wBp.args.stake))
+  const wClRc = await pub.getTransactionReceipt({ hash: st.walletClaimTx })
+  const WCB = wClRc.blockNumber
+  const wcev = parseEventLogs({ abi: M, logs: wClRc.logs })
+  const wpc = wcev.find(l => l.eventName === 'PayoutClaimed')
+  const wbc = wcev.find(l => l.eventName === 'BetClaimed')
+  chk('wallet claim tx succeeded', wClRc.status === 'success', wClRc.status)
+  chk('wallet claim msg.sender was the RELAY', getAddress(wClRc.from) === RL, wClRc.from)
+  chk('PayoutClaimed.bettor == the WALLET', getAddress(wpc.args.bettor) === WL)
+  chk('BetClaimed.bettor == the WALLET and betId matches',
+      getAddress(wbc.args.bettor) === WL && wbc.args.betId === BigInt(st.walletBetId))
+  const wDelta = (await at(USDC, erc20, 'balanceOf', [WL], WCB)) - (await at(USDC, erc20, 'balanceOf', [WL], WCB - 1n))
+  chk('WALLET USDC increased by exactly the payout', wDelta === wpc.args.amount, f(wDelta))
+  chk('wallet payout == exactly 2x stake', wpc.args.amount === STK * 2n, f(wpc.args.amount))
+  chk('market fully drained after both claims', (await at(USDC, erc20, 'balanceOf', [st.market], WCB)) === 0n)
+  const wBetLog = ev.filter(l => l.eventName === 'BetPlaced').find(l => l.args.betId === BigInt(st.walletBetId))
+  const wWinner = wBetLog.args.greaterThan ? scaled > wBetLog.args.lockedZ : scaled <= wBetLog.args.lockedZ
+  const wFromLogs = ms.args.refundMode ? wBetLog.args.stake
+                  : (wWinner ? (wBetLog.args.stake * sd.args.distributable) / sd.args.winningStakes : 0n)
+  chk('wallet payout computed from EVENTS ALONE == USDC received', wFromLogs === wDelta, f(wFromLogs))
+
   // --- the headline, re-read ---
   const eth = await readRetry(() => pub.getBalance({ address: AG }), 'agent ETH')
   const txc = await readRetry(() => pub.getTransactionCount({ address: AG }), 'agent nonce')
   chk('AGENT ETH balance is still exactly 0', eth === 0n, eth + ' wei')
   chk('AGENT transaction count is still exactly 0', txc === 0, String(txc))
+  const wEth = await readRetry(() => pub.getBalance({ address: WO }), 'wallet owner ETH')
+  const wTxc = await readRetry(() => pub.getTransactionCount({ address: WO }), 'wallet owner nonce')
+  chk('WALLET OWNER KEY ETH balance is still exactly 0', wEth === 0n, wEth + ' wei')
+  chk('WALLET OWNER KEY transaction count is still exactly 0', wTxc === 0, String(wTxc))
 
   console.log('\n=== VERIFY SUMMARY === ' + pass + ' assertions / ' + fail + ' failures')
   if (fail) process.exit(1)

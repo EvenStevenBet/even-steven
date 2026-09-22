@@ -28,6 +28,7 @@ mnemonic.txt
 # rehearsal harness deps + local run state
 scripts/node_modules/
 scripts/sepolia-rehearsal-state.json
+scripts/sepolia-rehearsal-v3-state.json
 scripts/*.log
 scripts/mainnet-deploy-state.json
 
