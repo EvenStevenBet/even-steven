@@ -36,3 +36,9 @@ scripts/fork-tests/node_modules/
 scripts/fork-tests/artifacts/
 scripts/fork-tests/cache/
 scripts/fork-tests/*.log
+
+# prague sub-harness deps (its own hardhat, purely to get EIP-7702)
+scripts/fork-tests/prague/node_modules/
+scripts/fork-tests/prague/cache/
+scripts/fork-tests/prague/artifacts/
+scripts/fork-tests/prague/package-lock.json

@@ -289,7 +289,7 @@ export async function runDifferential(world) {
     const fh = await wOwner.deployContract({ abi: filler.abi, bytecode: filler.bytecode, args: [] })
     const fAddr = (await pub.waitForTransactionReceipt({ hash: fh })).contractAddress
     await mintUSDC(fAddr, USD(1000000))
-    const CHUNK = 200
+    const CHUNK = 100
     for (const mk of [{ m: p.a.market, abi: p.a.abi }, { m: p.b.market, abi: p.b.abi }]) {
       const ah = await wOwner.writeContract({ address: fAddr, abi: filler.abi, functionName: 'approveMarket',
                                               args: [USDC, mk.m], gas: 200000n })

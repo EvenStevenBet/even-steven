@@ -26,8 +26,8 @@ const actorKeys = []
 // waitForTransactionReceipt then idles up to a full interval. Against a local
 // fork that turns a few thousand transactions into hours of pure waiting.
 const POLL = { pollingInterval: 20 }
-export const pub  = createPublicClient({ chain: base, transport: http(RPC_LOCAL, { timeout: 180000 }), ...POLL })
-export const test = createTestClient({ chain: base, mode: 'hardhat', transport: http(RPC_LOCAL, { timeout: 180000 }), ...POLL })
+export const pub  = createPublicClient({ chain: base, transport: http(RPC_LOCAL, { timeout: 900000 }), ...POLL })
+export const test = createTestClient({ chain: base, mode: 'hardhat', transport: http(RPC_LOCAL, { timeout: 900000 }), ...POLL })
 
 export function acct(i) {
   while (actorKeys.length <= i) actorKeys.push(privateKeyToAccount(generatePrivateKey()))
@@ -46,7 +46,7 @@ export async function assertFreshActors(n) {
   return n
 }
 export function wallet(account) {
-  return createWalletClient({ account, chain: base, transport: http(RPC_LOCAL, { timeout: 180000 }), ...POLL })
+  return createWalletClient({ account, chain: base, transport: http(RPC_LOCAL, { timeout: 900000 }), ...POLL })
 }
 
 export const erc20Abi = parseAbi([
@@ -82,7 +82,7 @@ export async function mintUSDC(to, amount) {
   const master = await pub.readContract({ address: USDC, abi: erc20Abi, functionName: 'masterMinter' })
   await test.impersonateAccount({ address: master })
   await setBalanceEth(master, 10n ** 20n)
-  const w = createWalletClient({ account: master, chain: base, transport: http(RPC_LOCAL, { timeout: 180000 }), ...POLL })
+  const w = createWalletClient({ account: master, chain: base, transport: http(RPC_LOCAL, { timeout: 900000 }), ...POLL })
   if (!minterConfigured) {
     const h = await w.writeContract({ address: USDC, abi: erc20Abi, functionName: 'configureMinter',
                                       args: [master, 2n ** 128n] })

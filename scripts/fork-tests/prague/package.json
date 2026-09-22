@@ -1,0 +1,2 @@
+{ "name": "hh-prague", "private": true, "type": "module",
+  "dependencies": { "hardhat": "^2.26.0", "viem": "2.21.54", "solc": "0.8.20", "dotenv": "16.4.5", "@openzeppelin/contracts": "4.9.3" } }
