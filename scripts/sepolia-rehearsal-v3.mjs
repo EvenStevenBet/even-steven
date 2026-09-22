@@ -339,6 +339,18 @@ async function phase1() {
   const agentPk = generatePrivateKey(), agent = privateKeyToAccount(agentPk)
   const relayPk = process.env.RELAY_PRIVATE_KEY || generatePrivateKey()
   const relay = wal(relayPk)
+  // Persist the generated keys IMMEDIATELY. Anything that throws later in phase1 —
+  // an RPC hiccup, a lagging node — must not be able to strand a live market whose
+  // only keys existed in this process's memory.
+  const saveState = (extra = {}) => {
+    const prev = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : {}
+    fs.writeFileSync(STATE, JSON.stringify({ ...prev, ...extra }, null, 2))
+  }
+  saveState({ market, factory: factory.addr, deployer: deployer.addr, agentPk, relayPk,
+              agentAddr: agent.address, relayAddr: relay.account.address,
+              ownerAddr: owner.account.address, stake: STAKE.toString(), seed: SEED.toString(),
+              gameId, createTx: rc.transactionHash, deployerTx: deployer.tx, factoryTx: factory.tx })
+  console.log('  (keys persisted to ' + STATE + ' before any further transaction)')
   console.log('\nagent (signs, never sends):', agent.address)
   console.log('relay (submits everything):', relay.account.address)
   chk('relay is NOT the agent', getAddress(relay.account.address) !== getAddress(agent.address))
@@ -363,6 +375,7 @@ async function phase1() {
   // cannot be expressed as (v, r, s), so this bettor can only reach USDC through
   // placeBetForWithSignature. The wallet's OWNER key holds no ETH and sends nothing.
   const walletOwnerPk = generatePrivateKey(), walletOwner = privateKeyToAccount(walletOwnerPk)
+  saveState({ walletOwnerPk, walletOwnerAddr: walletOwner.address })
   const WART = compileWallet()
   console.log('\ndeploying the ERC-1271 test wallet (owner key holds no ETH)...')
   const wDeployRc = await pub.waitForTransactionReceipt({ hash: await owner.deployContract({
@@ -379,6 +392,7 @@ async function phase1() {
   await untilState('wallet USDC funding visible',
     () => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [smartWallet] }),
     v => v >= cost)
+  saveState({ smartWallet, walletAddr: smartWallet, walletDeployTx: wDeployRc.transactionHash })
   console.log('  wallet funded with', f(cost), 'USDC and NO ETH')
   await assertAgentUntouched(walletOwner.address, 'wallet owner key, after deployment')
 
@@ -468,8 +482,11 @@ async function phase1() {
       getAddress(wBetRc.from) === getAddress(relay.account.address), wBetRc.from)
   chk('wallet bet: BetPlaced.bettor == the WALLET CONTRACT',
       getAddress(wBp.args.bettor) === getAddress(smartWallet), wBp.args.bettor)
-  chk('wallet spent exactly stake + fee',
-      (await readRetry(() => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [smartWallet] }), 'wallet bal')) === 0n)
+  // Poll rather than read once: a lagging node still reports the pre-bet balance.
+  const wBalAfter = await untilState('wallet USDC spent (visible)',
+    () => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [smartWallet] }),
+    v => v === 0n).catch(() => null)
+  chk('wallet spent exactly stake + fee', wBalAfter === 0n, wBalAfter === null ? 'never reached 0' : f(wBalAfter))
   await assertAgentUntouched(walletOwner.address, 'wallet owner key, after the wallet bet')
   await assertAgentUntouched(agent.address, 'agent, after the wallet bet')
 
@@ -510,7 +527,11 @@ async function phase1() {
       === b32('ASSERT_TRUTH'))
   await assertAgentUntouched(agent.address, 'after requestSettlement')
 
-  const reqBlk = await pub.getBlock({ blockNumber: reqRc.blockNumber })
+  // A load-balanced RPC will 404 a block it has itself just mined, so this read
+  // must retry. It used to be a bare getBlock, and when it threw, phase1 died AFTER
+  // requestSettlement had already succeeded but BEFORE the state file was written —
+  // losing the generated keys with a UMA assertion already live. See `adopt`.
+  const reqBlk = await readRetry(() => pub.getBlock({ blockNumber: reqRc.blockNumber }), 'requestSettlement block')
   fs.writeFileSync(STATE, JSON.stringify({
     market, factory: factory.addr, deployer: deployer.addr, agentPk, relayPk,
     betId: bp.args.betId.toString(), oppBetId: oppBp.args.betId.toString(),
@@ -865,6 +886,96 @@ async function verify() {
   if (fail) process.exit(1)
 }
 
+/**
+ * Rebuild the state file for an ALREADY-DEPLOYED market by reading chain.
+ *
+ * Why this exists: phase1 once died on an RPC hiccup after requestSettlement had
+ * succeeded but before the state file was written, stranding a live market whose
+ * agent/relay/wallet-owner keys existed only in that process. Those keys are not
+ * actually needed to finish: executeSettlement is callable by anyone, and
+ * claimPayoutFor is permissionless and always pays the bet's recorded bettor, never
+ * the submitter. So a fresh relay can complete the run, and the bettors' zero-ETH /
+ * zero-transaction property stays verifiable from chain because it is a property of
+ * their addresses, not of any key we hold.
+ *
+ * usage: node sepolia-rehearsal-v3.mjs adopt <market> <factory> <deployer>
+ */
+async function adopt() {
+  const [market, factory, deployer] = process.argv.slice(3)
+  if (!market || !factory || !deployer) {
+    console.error('usage: node sepolia-rehearsal-v3.mjs adopt <market> <factory> <deployer>'); process.exit(1)
+  }
+  console.log('=== ADOPT — rebuilding state for a live market from chain ===')
+  const arts = compile(); const M = arts.SportsbookMarket.abi
+  console.log('market  :', market)
+
+  // Public Sepolia RPCs refuse an unbounded getLogs range, so scan a window ending
+  // at the head. ADOPT_FROM_BLOCK overrides; the default window comfortably covers a
+  // rehearsal that is still inside its 7,200s liveness.
+  const head = await readRetry(() => pub.getBlockNumber(), 'head')
+  const fromBlock = process.env.ADOPT_FROM_BLOCK ? BigInt(process.env.ADOPT_FROM_BLOCK)
+                                                 : (head > 5000n ? head - 5000n : 0n)
+  console.log('scanning logs from block', fromBlock.toString(), 'to', head.toString())
+  const created = await readRetry(() => pub.getLogs({ address: market, fromBlock, toBlock: head }), 'market logs')
+  const ev = parseEventLogs({ abi: M, logs: created })
+  const bets = ev.filter(l => l.eventName === 'BetPlaced').sort((a, b) => Number(a.args.betId - b.args.betId))
+  console.log('bets found:', bets.length)
+  for (const b of bets) console.log('  betId ' + b.args.betId + '  bettor ' + b.args.bettor +
+    '  stake ' + f(b.args.stake) + '  greaterThan ' + b.args.greaterThan + '  lockedZ ' + b.args.lockedZ +
+    '  (tx ' + b.transactionHash + ')')
+  if (bets.length < 3) { console.error('expected 3 bets (agent, wallet, opposing)'); process.exit(1) }
+
+  const codeAt = async a => { const c = await pub.getCode({ address: a }); return !!c && c !== '0x' }
+  const agentBet = bets[0], walletBet = bets[1], oppBet = bets[2]
+  chk('bet 0 bettor is an EOA (the agent)', !(await codeAt(agentBet.args.bettor)), agentBet.args.bettor)
+  chk('bet 1 bettor is a CONTRACT (the ERC-1271 wallet)', await codeAt(walletBet.args.bettor), walletBet.args.bettor)
+
+  const sr = ev.find(l => l.eventName === 'SettlementRequested')
+  if (!sr) { console.error('no SettlementRequested on this market'); process.exit(1) }
+  const srBlk = await readRetry(() => pub.getBlock({ blockNumber: sr.blockNumber }), 'settlement-request block')
+  console.log('assertionId:', sr.args.assertionId, ' requested at', Number(srBlk.timestamp), '(block ' + sr.blockNumber + ')')
+
+  const betTx = await readRetry(() => pub.getTransactionReceipt({ hash: agentBet.transactionHash }), 'agent bet tx')
+  const walletTx = await readRetry(() => pub.getTransactionReceipt({ hash: walletBet.transactionHash }), 'wallet bet tx')
+
+  // A FRESH relay: the original key is gone and does not need to be recovered.
+  const relayPk = process.env.RELAY_PRIVATE_KEY || generatePrivateKey()
+  const relay = wal(relayPk)
+  console.log('\nfresh relay for the claims:', relay.account.address)
+  const relayBal = await readRetry(() => pub.getBalance({ address: relay.account.address }), 'relay ETH')
+  if (relayBal === 0n) {
+    console.log('funding the fresh relay with ETH for gas...')
+    await pub.waitForTransactionReceipt({ hash: await owner.sendTransaction({
+      to: relay.account.address, value: 4000000000000000n }) })
+    await untilState('relay gas visible', () => pub.getBalance({ address: relay.account.address }), v => v > 0n)
+  }
+
+  const st = {
+    market, factory, deployer, relayPk,
+    agentPk: null, walletOwnerPk: null,        // lost, and not needed — see the note above
+    betId: agentBet.args.betId.toString(), walletBetId: walletBet.args.betId.toString(),
+    oppBetId: oppBet.args.betId.toString(),
+    stake: agentBet.args.stake.toString(),
+    seed: (await readRetry(() => pub.readContract({ address: market, abi: M, functionName: 'PROTOCOL_SEED' }), 'seed')).toString(),
+    cost: (agentBet.args.stake + (agentBet.args.stake * 200n) / 10000n).toString(),
+    betBlock: agentBet.blockNumber.toString(), oppBlock: oppBet.blockNumber.toString(),
+    betTx: agentBet.transactionHash, walletBetTx: walletBet.transactionHash, oppTx: oppBet.transactionHash,
+    reqTx: sr.transactionHash,
+    agentAddr: agentBet.args.bettor, walletAddr: walletBet.args.bettor,
+    walletOwnerAddr: process.env.ADOPT_WALLET_OWNER || null,
+    relayAddr: relay.account.address, ownerAddr: owner.account.address,
+    opposingAddr: oppBet.args.bettor,
+    originalRelayAddr: betTx.from, originalWalletRelayAddr: walletTx.from,
+    requestedAt: Number(srBlk.timestamp), assertionId: sr.args.assertionId,
+    gameId: await readRetry(() => pub.readContract({ address: market, abi: M, functionName: 'gameId' }), 'gameId'),
+    adopted: true,
+  }
+  fs.writeFileSync(STATE, JSON.stringify(st, null, 2))
+  console.log('\nstate written ->', STATE)
+  console.log('=== ADOPT SUMMARY === pass=' + pass + ' fail=' + fail)
+  if (fail) process.exit(1)
+}
+
 /** Compile only, assert the Gate 2b sizes, touch no network. Run this before funding. */
 function sizes() {
   console.log('=== SIZES — compile only, no network access, no transactions ===')
@@ -879,11 +990,13 @@ if (phase === 'phase1') await phase1()
 else if (phase === 'phase2') await phase2()
 else if (phase === 'verify') await verify()
 else if (phase === 'sizes') sizes()
+else if (phase === 'adopt') await adopt()
 else {
-  console.log('usage: node sepolia-rehearsal-v3.mjs sizes | phase1 | phase2 | verify')
+  console.log('usage: node sepolia-rehearsal-v3.mjs sizes | phase1 | phase2 | verify | adopt')
   console.log('  sizes   compile and check runtime sizes only — no network, no transactions')
   console.log('  phase1  deploy, relayed bet, requestSettlement')
   console.log('  phase2  executeSettlement, relayed claimPayoutFor, live negatives')
   console.log('  verify  re-read everything from chain, no transactions')
+  console.log('  adopt   rebuild the state file for a live market: adopt <market> <factory> <deployer>')
   process.exit(1)
 }
