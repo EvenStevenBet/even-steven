@@ -1,5 +1,19 @@
 // W3 under REAL EIP-7702 semantics (hardfork prague). The main suite's node is
 // shanghai, where 0xef0100… is simply invalid code rather than a delegation.
+//
+// AUTHORITATIVE DELEGATE: MetaMask's own EIP7702StatelessDeleGator, already
+// deployed on Base at 0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B and present at the
+// pinned fork block. Only the delegating EOA is hardhat_setCode'd; the delegate
+// itself is real chain state, so this exercises the exact runtime bytecode a
+// MetaMask-upgraded account carries rather than a stand-in.
+//
+// The synthetic minimal-ERC-1271 delegate (test-contracts/Test7702Delegate.sol) is
+// no longer DEPLOYED here: it validates a plain 65-byte ECDSA signature, which is
+// the same shape MetaMask's does, so it duplicated this test rather than adding
+// coverage. Its ABI is still used below to encode the ERC-1271 isValidSignature
+// probe. The genuinely different case — an ERC-1271 wallet whose envelope is NOT
+// 65-byte ECDSA — is W2 in ../wallet-tests.mjs, with a 192-byte
+// abi.encode(ownerIndex, ecdsaSig) envelope.
 import fs from 'fs'; import path from 'path'; import solc from 'solc'
 import { createPublicClient, createWalletClient, createTestClient, http, parseAbi, keccak256, toHex,
          encodeAbiParameters, encodeFunctionData, getAddress, decodeEventLog } from 'viem'
@@ -77,9 +91,24 @@ let seq=0
 const mkMarket = async () => { const h = await wal(OWNER).writeContract({address:factory,abi:F,functionName:'createMarket',args:['NFL-2026-06-0'+(seq++)+'-HOME-P-AWAY-Q',0n,USD(1)]})
   const r = await pub.waitForTransactionReceipt({hash:h}); return '0x'+r.logs.find(l=>l.address.toLowerCase()===factory.toLowerCase()).topics[1].slice(26) }
 
-const dh = await wal(OWNER).deployContract({abi:del.Test7702Delegate.abi,bytecode:del.Test7702Delegate.bytecode,args:[]})
-const DELEGATE = (await pub.waitForTransactionReceipt({hash:dh})).contractAddress
-console.log('ERC-1271 delegate deployed:', DELEGATE)
+// THE REAL METAMASK DELEGATE, already deployed on Base at the pinned fork block.
+// Not a synthetic stand-in: this is the exact runtime bytecode agents will meet.
+const DELEGATE = '0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B'
+{
+  const c = await pub.getCode({address:DELEGATE})
+  console.log('MetaMask EIP7702StatelessDeleGator at', DELEGATE)
+  console.log('  runtime bytecode on the fork:', (c.length-2)/2, 'bytes')
+  ok('the real MetaMask delegate exists at the pinned fork block', !!c && c!=='0x', ((c.length-2)/2)+' bytes')
+  for (const [fn,sig] of [['NAME','NAME()'],['VERSION','VERSION()'],['DOMAIN_VERSION','DOMAIN_VERSION()']]) {
+    const r = await fetch(RPC,{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({jsonrpc:'2.0',id:1,method:'eth_call',params:[{to:DELEGATE,data:keccak256(toHex(sig)).slice(0,10)},'latest']})})
+    const j = await r.json()
+    if (j.result && j.result !== '0x') {
+      const hex=j.result.slice(2); const len=parseInt(hex.slice(64,128),16)
+      console.log('  ' + fn + '() =', JSON.stringify(Buffer.from(hex.slice(128,128+len*2),'hex').toString('utf8')))
+    } else console.log('  ' + fn + '() ->', j.result ?? JSON.stringify(j.error).slice(0,120))
+  }
+}
 
 const dom = { name: await pub.readContract({address:USDC,abi:erc20,functionName:'name'}),
               version: await pub.readContract({address:USDC,abi:erc20,functionName:'version'}),

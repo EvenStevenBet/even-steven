@@ -412,6 +412,55 @@ error, not a generic signature failure.
 > `salt` for the same side on a *different* market produces the same nonce and is rejected
 > as already used.
 
+### Which bet function your wallet needs (v3 — NOT YET DEPLOYED)
+
+> The functions below ship in **SportsbookMarket v1.11**, which is not on mainnet yet.
+> Everything above this box describes v1.10, which is live. `placeBetFor` is unchanged
+> between the two.
+
+USDC verifies the EIP-3009 signature itself: with `ecrecover` when the signer has no code,
+and through **ERC-1271** (`isValidSignature`) when it does. That single fact decides which
+entry point a wallet needs.
+
+| Signer | Use | Why |
+|---|---|---|
+| Plain EOA | `placeBetFor` | 65-byte ECDSA fits `(v, r, s)` |
+| EOA upgraded via EIP-7702 (e.g. MetaMask) | `placeBetFor` | MetaMask's delegate verifies plain 65-byte ECDSA |
+| Smart-contract wallet with a non-standard envelope | `placeBetForWithSignature` | Its signature is not 65 bytes and has no `(v, r, s)` form |
+
+* **EOAs, including MetaMask accounts upgraded via EIP-7702, use `placeBetFor`.** Confirmed
+  against MetaMask's real deployed delegate — `EIP7702StatelessDeleGator` at
+  `0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B` on Base: its `isValidSignature` is a plain
+  `ECDSA.recover(hash, signature) == address(this)` with no replay-safe wrapping, so it
+  verifies a raw EIP-3009 digest and fits `placeBetFor`'s existing `v, r, s` shape.
+* **`placeBetForWithSignature` is for wallets whose signature is NOT 65-byte ECDSA** — for
+  example Coinbase Smart Wallet-style envelopes such as `abi.encode(ownerIndex, ecdsaSig)`,
+  and any other ERC-1271 wallet with a non-standard signature format. It takes the same
+  arguments as `placeBetFor` except that `auth.signature` is opaque `bytes`:
+
+  ```solidity
+  struct AuthorizationBytes {
+      uint256 validAfter;
+      uint256 validBefore;
+      bytes32 nonce;      // still keccak256(abi.encode(salt, greaterThan))
+      bytes32 salt;
+      bytes   signature;  // EOA: abi.encodePacked(r,s,v). Contract wallet: its own format.
+  }
+
+  market.placeBetForWithSignature(bettor, greaterThan, stake, auth);
+  ```
+
+  Every other rule is identical to `placeBetFor`: the same `R6-2` nonce derivation, the same
+  `BadAuthorizationNonce()` on a mismatch, the bettor recorded as the owner, and funds moving
+  only from the bettor to the market. An EOA may use either function.
+* **For a wallet not listed above**, the outcome depends on whether the signer's code — a
+  permanent smart-contract wallet, or a 7702 delegate — implements ERC-1271 and accepts a
+  **raw digest**. A delegate that only validates its own internal message format, or that
+  does not implement ERC-1271 at all, fails through **both** functions. That is a
+  USDC/wallet compatibility question, not something this contract can special-case.
+* **`claimPayoutFor` requires no signature from any wallet type.** Nothing is signed for a
+  claim, so wallet format is irrelevant to collecting a payout.
+
 ### Signing (viem)
 
 ```ts
@@ -471,7 +520,8 @@ on the text:
 
 | String | Meaning | Retry? |
 |---|---|---|
-| `FiatTokenV2: invalid signature` | Bad signature, or a parameter that doesn't match what you signed (commonly a `stake` whose `stake + fee` differs from the signed `value`) | Re-sign |
+| `FiatTokenV2: invalid signature` | Bad signature, or a parameter that doesn't match what you signed (commonly a `stake` whose `stake + fee` differs from the signed `value`). Also what an ERC-1271 wallet returns when its `isValidSignature` rejects or reverts | Re-sign |
+| `ECRecover: invalid signature length` | An empty or truncated signature passed to `placeBetForWithSignature` (v3). This is Circle's own error, not a contract custom error | Fix the signature |
 | `FiatTokenV2: authorization is expired` | `validBefore` has passed | Re-sign with a new window |
 | `FiatTokenV2: authorization is not yet valid` | `validAfter` is in the future | Wait |
 | `FiatTokenV2: authorization is used or canceled` | Nonce already spent — usually a reused `salt` | Re-sign with a fresh salt |
