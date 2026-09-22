@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * Base MAINNET deploy for SportsbookMarket v1.10 / MarketDeployer v1.0 /
- * SportsbookFactory v1.5. Executes v1.10-mainnet-plan.md exactly.
+ * Base MAINNET deploy for SportsbookMarket v1.11 / MarketDeployer v1.1 /
+ * SportsbookFactory v1.6 — the v3 release. Executes v1.11-mainnet-plan.md exactly.
+ *
+ * NOT YET RUN. v1.10/v1.5 is what is live on mainnet; this script now targets v3 and
+ * will refuse to proceed unless the three contracts compile to 19,668 / 8,085 / 18,270
+ * at optimizer runs=200. The v1.10 deploy it previously performed is recorded in
+ * v1.10-mainnet-plan.md and in scripts/verification/ (compiled at runs=1).
  *
  *   node mainnet-deploy.mjs preflight     # read-only. No transactions. Run this first.
  *   node mainnet-deploy.mjs deploy        # plan steps 1-6 (deploy + wiring + approval)
@@ -10,6 +15,9 @@
  *
  * env (repo/scripts/.env, gitignored — never commit):
  *   MAINNET_PRIVATE_KEY   production wallet 0x6cF0A0b5...603B. Refuses any other address.
+ *                         Resolved from $EVEN_STEVEN_ENV, then ~/.even-steven/.env, then
+ *                         scripts/.env — key material should not sit in an iCloud-synced
+ *                         folder, which is what ~/Desktop is.
  *   MAINNET_RPC           optional, defaults to https://mainnet.base.org
  *   GAME_ID / ORACLE_Z    step 7 only. ORACLE_Z is 4-decimal fixed point (-35000 = -3.5).
  *
@@ -67,7 +75,11 @@ function resolveRpc() {
 }
 const RPC  = resolveRpc()
 const LAUNCH_SEED = 1000000n                       // 1 USDC/side, Option D
-const EXPECTED = { MarketDeployer: 17650, SportsbookFactory: 8048, SportsbookMarket: 16254 }
+// v1.11 / v1.1 / v1.6 at solc 0.8.20+commit.a1b79de6, optimizer ON, runs=200, shanghai.
+// Measured at Gate 1c and reproduced by scripts/verification/v1.11/standard-json-input.json.
+// At runs=1 the same sources give 18022 / 19439 / 8048 — if you see those, the runs
+// setting is wrong and this gate will (correctly) abort the deploy.
+const EXPECTED = { MarketDeployer: 19668, SportsbookFactory: 8085, SportsbookMarket: 18270 }
 const MARKET_CREATED_TOPIC0 = '0xb0986a0038b9a2afc3b9dc7e400ddeb31ff547737cf738390752e5e6eba767a5'
 const b32 = s => padHex(stringToHex(s), { size: 32, dir: 'right' })
 const f   = v => formatUnits(v, 6)
@@ -121,7 +133,7 @@ async function readRetry(fn, label, tries = 5) {
 }
 
 function compile() {
-  const files = ['SportsbookMarket-v1_10.sol', 'MarketDeployer-v1_0.sol', 'SportsbookFactory-v1_5.sol']
+  const files = ['SportsbookMarket-v1_11.sol', 'MarketDeployer-v1_1.sol', 'SportsbookFactory-v1_6.sol']
   const sources = {}
   for (const fl of files) sources[fl] = { content: fs.readFileSync(path.join(CONTRACTS, fl), 'utf8') }
   const ozRoots = [path.resolve(HERE, 'node_modules/@openzeppelin/contracts'),

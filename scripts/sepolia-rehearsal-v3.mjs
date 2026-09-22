@@ -116,6 +116,21 @@ async function untilState(label, read, want, tries = 40) {
                            : ' (last seen: ' + String(last) + ')'))
 }
 
+/**
+ * getLogs in <=1000-block slices. Base Sepolia's public RPC rejects wider ranges
+ * ("eth_getLogs is limited to a 1,000 range"), and the span between the first bet
+ * and the last claim grows with every minute of real UMA liveness.
+ */
+async function getLogsChunked(address, fromBlock, toBlock, step = 999n) {
+  const out = []
+  for (let a = BigInt(fromBlock); a <= BigInt(toBlock); a += step + 1n) {
+    const b = a + step > BigInt(toBlock) ? BigInt(toBlock) : a + step
+    out.push(...await readRetry(() => pub.getLogs({ address, fromBlock: a, toBlock: b }),
+                                'getLogs ' + a + '-' + b))
+  }
+  return out
+}
+
 /** Retry a read through a transient RPC hiccup. Never retries a write. */
 async function readRetry(fn, label, tries = 5) {
   let last
@@ -577,7 +592,7 @@ async function phase2() {
   let ms, sd, exTx = null
   if (alreadySettled) {
     console.log('  market already settled by a previous run — reading the events from logs')
-    const logs = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.oppBlock), toBlock: 'latest' })
+    const logs = await getLogsChunked(st.market, BigInt(st.oppBlock), await pub.getBlockNumber())
     const ev = parseEventLogs({ abi: M, logs })
     ms = ev.find(l => l.eventName === 'MarketSettled'); sd = ev.find(l => l.eventName === 'SettlementDetails')
     exTx = ms?.transactionHash
@@ -653,7 +668,14 @@ async function phase2() {
               f(await at(USDC, erc20, 'balanceOf', [st.market], CB)).padStart(12))
   chk('AGENT USDC delta == +PayoutClaimed.amount', agentPost - agentPre === pc.args.amount, f(agentPost - agentPre))
   chk('RELAY USDC delta == 0 (relay never custodies the payout)', relayPost - relayPre === 0n, f(relayPost - relayPre))
-  chk('market fully drained after the claim', (await at(USDC, erc20, 'balanceOf', [st.market], CB)) === 0n)
+  // Two winners: at this block the market still holds the OTHER winner's payout.
+  // Full drainage is asserted after the second claim, below.
+  {
+    const left = await at(USDC, erc20, 'balanceOf', [st.market], CB)
+    const want = BigInt(st.stake) * 2n
+    chk("market holds exactly the other winner's payout after the first claim",
+        left === want, f(left) + ' left, expected ' + f(want))
+  }
   chk('realised payout == exactly 2x stake', pc.args.amount === BigInt(st.stake) * 2n, f(pc.args.amount))
   chk('bet is now marked claimed', (await at(st.market, M, 'getBet', [BigInt(st.betId)], CB)).claimed === true)
 
@@ -676,8 +698,10 @@ async function phase2() {
   const wPost = await at(USDC, erc20, 'balanceOf', [WL], WCB)
   chk('WALLET USDC delta == +PayoutClaimed.amount', wPost - wPre === wpc.args.amount, f(wPost - wPre))
   chk('wallet payout == exactly 2x stake', wpc.args.amount === BigInt(st.stake) * 2n, f(wpc.args.amount))
-  chk('market fully drained after BOTH claims',
-      (await at(USDC, erc20, 'balanceOf', [st.market], WCB)) === 0n)
+  {
+    const left = await at(USDC, erc20, 'balanceOf', [st.market], WCB)
+    chk('market fully drained after BOTH claims', left === 0n, f(left) + ' remaining')
+  }
   console.log('\n  pinned-block balance table (wallet claim block ' + WCB + '):')
   console.log('    WALLET    ' + f(wPre).padStart(12) + ' ' + f(wPost).padStart(12) + ' ' + f(wPost - wPre).padStart(12))
 
@@ -687,7 +711,7 @@ async function phase2() {
   await assertAgentUntouched(WO, 'wallet owner key, AFTER the wallet was paid')
 
   // ---- step 7: reconstruct the payout from logs alone ----
-  const logsAll = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.betBlock), toBlock: CB })
+  const logsAll = await getLogsChunked(st.market, BigInt(st.betBlock), CB)
   const evAll = parseEventLogs({ abi: M, logs: logsAll })
   const bpLog = evAll.filter(l => l.eventName === 'BetPlaced').find(l => l.args.betId === BigInt(st.betId))
   const sdLog = evAll.find(l => l.eventName === 'SettlementDetails')
@@ -761,6 +785,13 @@ async function verify() {
   const arts = compile(); const M = arts.SportsbookMarket.abi, F = arts.SportsbookFactory.abi
   const AG = getAddress(st.agentAddr), RL = getAddress(st.relayAddr), OW = getAddress(st.ownerAddr)
   const WL = getAddress(st.walletAddr), WO = getAddress(st.walletOwnerAddr)
+  // After `adopt`, the relay that CLAIMS is a fresh key while the relay that placed
+  // the bets is the original one, whose key was lost. Both are relays — neither is a
+  // bettor — so the bet checks compare against the submitter recorded at the time,
+  // not against whoever is claiming now.
+  const BET_RL  = getAddress(st.originalRelayAddr || st.relayAddr)
+  const WBET_RL = getAddress(st.originalWalletRelayAddr || st.originalRelayAddr || st.relayAddr)
+  if (st.adopted) console.log('(adopted run: bets submitted by ' + BET_RL + ', claims by ' + RL + ')')
   const STK = BigInt(st.stake), SD = BigInt(st.seed), FEE = (STK * 200n) / 10000n
   console.log('market :', st.market)
   console.log('agent  :', AG, ' relay:', RL, ' owner:', OW)
@@ -788,7 +819,9 @@ async function verify() {
   const B = betRc.blockNumber, A = B - 1n
   const bp = parseEventLogs({ abi: M, logs: betRc.logs }).find(l => l.eventName === 'BetPlaced')
   chk('placeBetFor tx succeeded', betRc.status === 'success', betRc.status)
-  chk('placeBetFor msg.sender was the RELAY', getAddress(betRc.from) === RL, betRc.from)
+  chk('placeBetFor msg.sender was a RELAY, not the bettor',
+      getAddress(betRc.from) === BET_RL && getAddress(betRc.from) !== AG,
+      'submitter ' + betRc.from + ' vs bettor ' + AG)
   chk('BetPlaced.bettor is the AGENT, not msg.sender', getAddress(bp.args.bettor) === AG, bp.args.bettor)
   chk('BetPlaced.stake == stake (fee excluded)', bp.args.stake === STK, f(bp.args.stake))
   chk('BetPlaced.fee == 2% of stake', bp.args.fee === FEE, f(bp.args.fee))
@@ -797,7 +830,8 @@ async function verify() {
   chk('relay USDC unchanged across the bet', (await d(RL)) === 0n, f(await d(RL)))
 
   // --- settlement, and the two new events ---
-  const logs = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.betBlock), toBlock: 'latest' })
+  const lastBlock = BigInt(st.walletClaimBlock || st.claimBlock || st.oppBlock)
+  const logs = await getLogsChunked(st.market, BigInt(st.betBlock), lastBlock)
   const ev = parseEventLogs({ abi: M, logs })
   const ms = ev.find(l => l.eventName === 'MarketSettled')
   const sd = ev.find(l => l.eventName === 'SettlementDetails')
@@ -832,7 +866,12 @@ async function verify() {
   chk('AGENT USDC increased by exactly the payout', agentDelta === pc.args.amount, f(agentDelta))
   chk('RELAY USDC delta == 0', relayDelta === 0n, f(relayDelta))
   chk('PayoutClaimed.amount == exactly 2x stake', pc.args.amount === STK * 2n, f(pc.args.amount))
-  chk('market fully drained after the claim', (await at(USDC, erc20, 'balanceOf', [st.market], CB)) === 0n)
+  {
+    const left = await at(USDC, erc20, 'balanceOf', [st.market], CB)
+    const want = STK * 2n
+    chk("market holds exactly the other winner's payout after the first claim",
+        left === want, f(left) + ' left, expected ' + f(want))
+  }
   chk('bet marked claimed', (await at(st.market, M, 'getBet', [BigInt(st.betId)], undefined)).claimed === true)
 
   // --- log-only reconstruction, again from chain ---
@@ -849,7 +888,9 @@ async function verify() {
   const wBetRc = await pub.getTransactionReceipt({ hash: st.walletBetTx })
   const wBp = parseEventLogs({ abi: M, logs: wBetRc.logs }).find(l => l.eventName === 'BetPlaced')
   chk('placeBetForWithSignature tx succeeded', wBetRc.status === 'success', wBetRc.status)
-  chk('wallet bet msg.sender was the RELAY', getAddress(wBetRc.from) === RL, wBetRc.from)
+  chk('wallet bet msg.sender was a RELAY, not the wallet',
+      getAddress(wBetRc.from) === WBET_RL && getAddress(wBetRc.from) !== WL,
+      'submitter ' + wBetRc.from + ' vs bettor ' + WL)
   chk('BetPlaced.bettor is the WALLET CONTRACT', getAddress(wBp.args.bettor) === WL, wBp.args.bettor)
   chk('wallet bet stake == stake (fee excluded)', wBp.args.stake === STK, f(wBp.args.stake))
   const wClRc = await pub.getTransactionReceipt({ hash: st.walletClaimTx })
@@ -865,7 +906,10 @@ async function verify() {
   const wDelta = (await at(USDC, erc20, 'balanceOf', [WL], WCB)) - (await at(USDC, erc20, 'balanceOf', [WL], WCB - 1n))
   chk('WALLET USDC increased by exactly the payout', wDelta === wpc.args.amount, f(wDelta))
   chk('wallet payout == exactly 2x stake', wpc.args.amount === STK * 2n, f(wpc.args.amount))
-  chk('market fully drained after both claims', (await at(USDC, erc20, 'balanceOf', [st.market], WCB)) === 0n)
+  {
+    const left = await at(USDC, erc20, 'balanceOf', [st.market], WCB)
+    chk('market fully drained after both claims', left === 0n, f(left) + ' remaining')
+  }
   const wBetLog = ev.filter(l => l.eventName === 'BetPlaced').find(l => l.args.betId === BigInt(st.walletBetId))
   const wWinner = wBetLog.args.greaterThan ? scaled > wBetLog.args.lockedZ : scaled <= wBetLog.args.lockedZ
   const wFromLogs = ms.args.refundMode ? wBetLog.args.stake

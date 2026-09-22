@@ -527,16 +527,34 @@ on the text:
 | `FiatTokenV2: authorization is used or canceled` | Nonce already spent — usually a reused `salt` | Re-sign with a fresh salt |
 | `ERC20: transfer amount exceeds balance` | Insufficient USDC for `stake + fee` | Top up |
 | `Blacklistable: account is blacklisted` | Circle has blacklisted the address | Do not retry |
-| `Pausable: paused` | Market is paused | Retry later |
+| `Pausable: paused` | Market is paused (v1.10 only — see below) | Retry later |
+
+> **v3 changes two of these from strings to custom errors** (SportsbookMarket v1.11, not yet
+> deployed). On markets created by Factory v1.6, match on the selector, not the text:
+>
+> | v1.10 revert string | v1.11 custom error | Selector |
+> |---|---|---|
+> | `Pausable: paused` | `MarketPaused()` | `0x54882d18` |
+> | `Ownable: caller is not the owner` | `NotOwner()` | `0x30cd7471` |
+>
+> Both are market-only; the factory is unchanged. `unpause()` on a market that is not paused
+> still reverts with OpenZeppelin's `Pausable: not paused` string — that one is deliberately
+> untouched. Everything in the Circle table above is unchanged in v1.11: those strings come
+> from USDC, not from this contract.
 
 ### Claiming
 
-> **You need native ETH to claim.** Placing a bet through `placeBetFor` is gasless for you —
-> the relay pays the gas, you only sign. **Claiming is not.** `claimPayout()` is a direct
-> call from your own address, so an agent funded purely in USDC can enter a position and
-> then be unable to collect its winnings. Keep a small ETH balance on Base for this. There
-> is no relayed-claim entry point in v1.10; the 90-day `CLAIM_TIMEOUT` gives you time to
-> acquire gas, and a `claimPayoutFor` is a v3 candidate.
+> **You need native ETH to claim — on markets created by Factory v1.5 (R6-9).** Placing a
+> bet through `placeBetFor` is gasless for you: the relay pays the gas, you only sign.
+> Claiming on v1.10 is not. `claimPayout()` is a direct call from your own address, so an
+> agent funded purely in USDC can enter a position and then be unable to collect its
+> winnings. Keep a small ETH balance on Base. The 90-day `CLAIM_TIMEOUT` gives you time to
+> acquire gas.
+>
+> **R6-9 does NOT apply to markets created by Factory v1.6** (SportsbookMarket v1.11, not
+> yet deployed). Those expose `claimPayoutFor`, so a relay can claim on your behalf and you
+> never need ETH at all. Check which factory created the market before assuming you need
+> gas — see the v3 section below.
 
 You claim your own payout directly — the relay is not involved and cannot claim for you:
 
@@ -549,6 +567,32 @@ market.claimAllPayouts();           // everything you hold in this market
 `claimPayouts()` is atomic and strict: an already-claimed, non-winning, out-of-range or
 someone-else's id reverts the whole batch and claims nothing. `claimAllPayouts()` is the
 lenient variant — it skips what it cannot claim.
+
+#### Relayed claiming — `claimPayoutFor` (v3 — NOT YET DEPLOYED)
+
+```solidity
+market.claimPayoutFor(bettor, [id1, id2]);   // submitted by ANY address
+```
+
+`claimPayoutFor` is **permissionless and takes no signature**. Any relay may call it, and
+the USDC is **always** sent to `bettor` — the address recorded on the bet — never to
+`msg.sender`. There is nothing for you to sign: EIP-3009 authorises USDC moving *from* a
+signer, whereas a claim moves USDC from the market *to* you, and the fixed destination
+makes a signature redundant. It works for every wallet type, including contract wallets.
+
+Semantics match `claimPayouts()` exactly — strict and atomic. An already-claimed,
+non-winning, out-of-range or someone-else's id reverts the whole call and moves nothing, so
+a relay must submit only claimable ids. Like `claimPayout`, it is deliberately **not**
+pausable: a pause must never block withdrawal of money already owed. It works in refund mode
+too.
+
+Two properties worth designing around:
+
+* **Anyone can trigger your claim at a time you did not choose.** They cannot redirect or
+  custody the funds — the destination is fixed to the bet's recorded bettor.
+* **Your own claim may revert `AlreadyClaimed()` if a relay got there first.** That is not
+  an error condition: the money has already landed in your address. Check your balance and
+  the `BetClaimed` log before treating it as a failure.
 
 ---
 
@@ -625,8 +669,17 @@ event SettlementRequested(bytes32 assertionId, int256 proposedSpread, address as
 // Market finalized — claim payouts now
 event MarketSettled(int256 indexed finalSpread, bool refundMode, bool viaOracle);
 
-// Payout claimed
+// Payout claimed — the TOTAL moved in this transaction
 event PayoutClaimed(address indexed bettor, uint256 amount);
+
+// v3 (NOT YET DEPLOYED) — per-bet claim attribution. One per bet claimed, on all four
+// claim paths (claimPayout, claimAllPayouts, claimPayouts, claimPayoutFor). The
+// BetClaimed payouts within one transaction sum to that transaction's PayoutClaimed.amount.
+event BetClaimed(address indexed bettor, uint256 indexed betId, uint256 payout);
+
+// v3 (NOT YET DEPLOYED) — emitted once at settlement, immediately before MarketSettled
+// in the same transaction. Makes any bet's payout computable from logs alone.
+event SettlementDetails(uint256 distributable, uint256 winningStakes);
 
 // Market canceled — stake refunds available
 event MarketCanceled(address indexed by);
@@ -634,6 +687,30 @@ event MarketCanceled(address indexed by);
 // Safety net triggered — stake refunds available
 event RefundTriggered(address indexed by);
 ```
+
+`PayoutClaimed` and `MarketSettled` are **byte-identical** in v1.11 — same signature, same
+topic0. All thirteen pre-existing events are unchanged; `BetClaimed` and `SettlementDetails`
+are purely additive, so existing indexers need no change.
+
+### Reconstructing a payout from logs alone (v3)
+
+With `SettlementDetails`, you can compute any bet's payout without an RPC call into the
+market — useful for an indexer, or for checking a claim before submitting it:
+
+```
+payout = refundMode ? stake
+                    : (isWinner ? stake * distributable / winningStakes : 0)
+
+isWinner = greaterThan ? (finalSpread * 10000 >  lockedZ)
+                       : (finalSpread * 10000 <= lockedZ)
+```
+
+`stake`, `greaterThan` and `lockedZ` come from that bet's `BetPlaced`; `finalSpread` and
+`refundMode` from `MarketSettled`; `distributable` and `winningStakes` from
+`SettlementDetails`. Use integer arithmetic and floor division — this is exactly what the
+contract does, so the result matches the USDC you receive to the base unit. Note
+`distributable` already excludes the protocol seed, which is returned to the protocol at
+settlement and never competes with a winner's claim.
 
 ---
 

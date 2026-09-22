@@ -1,5 +1,9 @@
 # BaseScan verification inputs — v1.10 / v1.5 (Base mainnet)
 
+> This bundle is the record for the contracts **live on Base mainnet today**, compiled at
+> `runs=1`. Do not change it. The v3 release (v1.11 / v1.6, `runs=200`) has its own bundle
+> in [`v1.11/`](v1.11/).
+
 Everything needed to verify all three contracts. Not submitted from this machine:
 no `ETHERSCAN_API_KEY` exists in the project, so this must be done through the
 BaseScan UI or with a key supplied separately. (BaseScan verification now runs
