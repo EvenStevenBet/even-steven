@@ -9,7 +9,8 @@
  * v1.10-mainnet-plan.md and in scripts/verification/ (compiled at runs=1).
  *
  *   node mainnet-deploy.mjs preflight     # read-only. No transactions. Run this first.
- *   node mainnet-deploy.mjs deploy        # plan steps 1-6 (deploy + wiring + approval)
+ *   node mainnet-deploy.mjs deploy-deployer  # plan step 2 ONLY (MarketDeployer), then stops
+ *   node mainnet-deploy.mjs deploy        # plan steps 3-6 (factory + wiring + approval)
  *   node mainnet-deploy.mjs open-market   # plan step 7. Requires GAME_ID + ORACLE_Z + --confirm
  *   node mainnet-deploy.mjs verify        # post-deploy checks, read-only
  *
@@ -41,7 +42,9 @@ import { loadEnv, envSearchList } from './env-resolve.mjs'
 
 const HERE      = path.dirname(fileURLToPath(import.meta.url))
 const CONTRACTS = path.resolve(HERE, '../contracts')
-const STATE     = path.resolve(HERE, 'mainnet-deploy-state.json')
+// v3 writes its own state file. mainnet-deploy-state.json is the v1.10/v1.5 record
+// (deployer 0xa88b73cf…, factory 0xf69d4c98…) and must not be overwritten or deleted.
+const STATE     = path.resolve(HERE, 'mainnet-deploy-v3-state.json')
 // Same env resolution as every other script here: $EVEN_STEVEN_ENV, then
 // ~/.even-steven/.env, then scripts/.env. Key material must not sit under
 // ~/Desktop, which is iCloud-synced.
@@ -242,10 +245,64 @@ async function preflight() {
   console.log('\n  pre-flight checks passed.' + (k ? '' : ' Key still required before `deploy`.'))
 }
 
-async function deploy() {
-  console.log('=== DEPLOY — plan steps 1-6 ===')
+const readState  = () => fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : {}
+const writeState = o => fs.writeFileSync(STATE, JSON.stringify({ ...readState(), ...o }, null, 2))
+
+/**
+ * Plan step 2 ONLY — deploy MarketDeployer and stop.
+ *
+ * The full `deploy` runs steps 2-6 in one go. This release is being gated one
+ * approval at a time, so step 2 is separable: it sends exactly one transaction and
+ * writes the address to state. `deploy` then resumes from step 3.
+ */
+async function deployDeployer() {
+  console.log('=== DEPLOY — plan step 2 ONLY (MarketDeployer) ===')
   if (await pub.getChainId() !== 8453) die('not Base mainnet')
-  if (fs.existsSync(STATE)) die('a deploy state file already exists (' + STATE + '). Refusing to deploy twice. Delete it only if you are certain.')
+  const st0 = readState()
+  if (st0.deployer) die('MarketDeployer already recorded in ' + STATE + ' (' + st0.deployer + '). Refusing to deploy twice.')
+  const w = wallet()
+  console.log('  deploying from:', w.account.address)
+
+  console.log('\n  -- step 1: compile --')
+  const arts = compile()
+
+  console.log('\n  -- prerequisite: ASSERT_TRUTH2 whitelisted --')
+  const { t2 } = await identifierWhitelisted()
+  console.log('    ASSERT_TRUTH2:', t2)
+  if (!t2) die('ASSERT_TRUTH2 is not whitelisted on Base mainnet')
+
+  const balBefore = await pub.getBalance({ address: w.account.address })
+  console.log('\n  -- step 2: MarketDeployer --')
+  const h = await w.deployContract({ abi: arts.MarketDeployer.abi, bytecode: arts.MarketDeployer.bytecode, args: [] })
+  console.log('    tx: ' + h)
+  const r = await pub.waitForTransactionReceipt({ hash: h })
+  if (r.status !== 'success') die('MarketDeployer deployment reverted')
+  const code = await untilState('MarketDeployer code visible',
+    () => pub.getCode({ address: r.contractAddress }), c => c && c !== '0x')
+  const size = (code.length - 2) / 2
+  if (size !== arts.MarketDeployer.size) die('on-chain size ' + size + ' != compiled ' + arts.MarketDeployer.size)
+  const balAfter = await pub.getBalance({ address: w.account.address })
+  const cost = balBefore - balAfter
+  console.log('    address       : ' + r.contractAddress)
+  console.log('    block         : ' + r.blockNumber)
+  console.log('    gas used      : ' + r.gasUsed)
+  console.log('    effective gas : ' + r.effectiveGasPrice + ' wei (' + formatUnits(r.effectiveGasPrice, 9) + ' gwei)')
+  console.log('    cost          : ' + formatEther(cost) + ' ETH')
+  console.log('    runtime size  : ' + size + ' bytes  (expected ' + arts.MarketDeployer.size + ')  OK')
+  writeState({ chainId: 8453, owner: w.account.address, deployer: r.contractAddress,
+               deployerTx: h, deployerBlock: r.blockNumber.toString(),
+               deployerGas: r.gasUsed.toString(), deployerCostWei: cost.toString(),
+               deployedAt: new Date().toISOString() })
+  console.log('\n  state -> ' + STATE)
+  console.log('\n  STOP. Step 3 (SportsbookFactory) is a separate approval.')
+}
+
+async function deploy() {
+  console.log('=== DEPLOY — plan steps 3-6 (resumes after step 2) ===')
+  if (await pub.getChainId() !== 8453) die('not Base mainnet')
+  const st0 = readState()
+  if (st0.factory) die('a factory is already recorded in ' + STATE + ' (' + st0.factory + '). Refusing to deploy twice.')
+  if (!st0.deployer) die('no MarketDeployer in ' + STATE + '. Run `deploy-deployer` (plan step 2) first.')
   const w = wallet()
   console.log('  deploying from:', w.account.address)
 
@@ -269,8 +326,15 @@ async function deploy() {
     return r.contractAddress
   }
 
-  console.log('\n  -- step 2: MarketDeployer --')
-  const deployer = await dep('MarketDeployer')
+  const deployer = st0.deployer
+  console.log('\n  -- step 2: MarketDeployer (already deployed) --')
+  console.log('    reusing ' + deployer + ' from ' + STATE)
+  {
+    const c = await pub.getCode({ address: deployer })
+    const sz = c ? (c.length - 2) / 2 : 0
+    if (sz !== arts.MarketDeployer.size) die('recorded MarketDeployer has runtime ' + sz + ', expected ' + arts.MarketDeployer.size)
+    console.log('    on-chain runtime ' + sz + ' bytes  OK')
+  }
   console.log('\n  -- step 3: SportsbookFactory --')
   const factory = await dep('SportsbookFactory', [USDC, OO, deployer])
   const F = arts.SportsbookFactory.abi
@@ -399,7 +463,8 @@ async function verify() {
 
 const cmd = process.argv[2]
 if (cmd === 'preflight') await preflight()
+else if (cmd === 'deploy-deployer') await deployDeployer()
 else if (cmd === 'deploy') await deploy()
 else if (cmd === 'open-market') await openMarket()
 else if (cmd === 'verify') await verify()
-else { console.error('usage: mainnet-deploy.mjs preflight|deploy|open-market|verify'); process.exit(1) }
+else { console.error('usage: mainnet-deploy.mjs preflight|deploy-deployer|deploy|open-market|verify'); process.exit(1) }
