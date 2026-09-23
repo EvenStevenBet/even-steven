@@ -14,7 +14,11 @@
  *   node mainnet-deploy.mjs verify        # post-deploy checks, read-only
  *
  * env (repo/scripts/.env, gitignored — never commit):
- *   MAINNET_PRIVATE_KEY   production wallet 0x6cF0A0b5...603B. Refuses any other address.
+ *   MAINNET_PRIVATE_KEY   the deploying key. Must derive MAINNET_DEPLOY_WALLET exactly.
+ *   MAINNET_DEPLOY_WALLET the address this deploy must come from. REQUIRED, no default:
+ *                         an unset value aborts rather than deploying from whatever key
+ *                         happens to be present. v1.5 went out from 0x6cF0A0b5...603B,
+ *                         which still owns Factory v1.5; v3 uses a fresh wallet.
  *                         Resolved from $EVEN_STEVEN_ENV, then ~/.even-steven/.env, then
  *                         scripts/.env — key material should not sit in an iCloud-synced
  *                         folder, which is what ~/Desktop is.
@@ -45,7 +49,16 @@ const ENVFILE   = loadEnv(HERE) || ('(none found; looked in:\n    ' + envSearchL
 
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const OO   = '0x2aBf1Bd76655de80eDB3086114315Eec75AF500c'
-const PROD = '0x6cF0A0b5282409E24dC35e2c1834f9111315603B'
+/**
+ * The address this script is allowed to deploy from. REQUIRED — there is no default,
+ * so a missing value aborts rather than letting a deploy go out from whatever key
+ * happens to be in the env file.
+ *
+ * It was hardcoded to 0x6cF0A0b5…603B, the wallet that deployed v1.5 and still owns
+ * Factory v1.5 and the Bills/Lions market. v3 deploys from a fresh key, so the
+ * expected address is now stated explicitly per deploy instead of baked in.
+ */
+const PROD = (process.env.MAINNET_DEPLOY_WALLET || '').trim()
 /**
  * RPC selection, in order: MAINNET_RPC > ALCHEMY_RPC_URL > ALCHEMY_KEY > public.
  *
@@ -99,9 +112,14 @@ function account() {
   const k = (process.env.MAINNET_PRIVATE_KEY || '').trim()
   if (!k) die('MAINNET_PRIVATE_KEY is not set in ' + ENVFILE)
   if (!/^0x[0-9a-fA-F]{64}$/.test(k)) die('MAINNET_PRIVATE_KEY must be 0x + 64 hex (got length ' + k.length + ')')
+  if (!PROD) die('MAINNET_DEPLOY_WALLET is not set. State the address this deploy must come ' +
+                 'from (in ' + ENVFILE + ' or the environment) — this script will not deploy ' +
+                 'from an unstated address.')
+  if (!/^0x[0-9a-fA-F]{40}$/.test(PROD)) die('MAINNET_DEPLOY_WALLET must be 0x + 40 hex (got "' + PROD + '")')
   const a = privateKeyToAccount(k)
   if (getAddress(a.address) !== getAddress(PROD))
-    die('key derives ' + a.address + ' but the production wallet is ' + PROD + '. Refusing to deploy from another address.')
+    die('key derives ' + a.address + ' but MAINNET_DEPLOY_WALLET is ' + getAddress(PROD) +
+        '. Refusing to deploy from another address.')
   return a
 }
 const wallet = () => createWalletClient({ account: account(), chain: base, transport: http(RPC, { timeout: 120000 }) })
@@ -197,17 +215,19 @@ async function preflight() {
   // Soft check: preflight must stay usable before the key is in place.
   let addr = PROD
   const k = (process.env.MAINNET_PRIVATE_KEY || '').trim()
+  const expected = PROD && /^0x[0-9a-fA-F]{40}$/.test(PROD) ? getAddress(PROD) : null
+  console.log('    MAINNET_DEPLOY_WALLET:', expected || '*** NOT SET — deploy will abort ***')
   if (!k) {
     console.log('    MAINNET_PRIVATE_KEY : NOT SET — cannot deploy yet')
-    console.log('    (continuing read-only against the production wallet ' + PROD + ')')
+    if (expected) { addr = expected; console.log('    (continuing read-only against ' + expected + ')') }
   } else if (!/^0x[0-9a-fA-F]{64}$/.test(k)) {
     console.log('    MAINNET_PRIVATE_KEY : BAD FORMAT (expected 0x + 64 hex, length ' + k.length + ')')
   } else {
     const a = privateKeyToAccount(k).address
     addr = a
-    const match = getAddress(a) === getAddress(PROD)
-    console.log('    key derives         :', a, match ? ' MATCHES production wallet' : ' *** WRONG WALLET ***')
-    if (!match) console.log('    expected            :', PROD)
+    const match = expected !== null && getAddress(a) === expected
+    console.log('    key derives         :', a, match ? ' MATCHES MAINNET_DEPLOY_WALLET' : ' *** WRONG WALLET ***')
+    if (!match) console.log('    expected            :', expected || '(MAINNET_DEPLOY_WALLET not set)')
   }
   const eth = await pub.getBalance({ address: addr })
   const usdc = await readRetry(() => pub.readContract({ address: USDC, abi: erc20, functionName: 'balanceOf', args: [addr] }), 'usdc')
