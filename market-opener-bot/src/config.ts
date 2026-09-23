@@ -1,4 +1,7 @@
-import 'dotenv/config';
+// Must be the FIRST import: it populates process.env before anything below reads it.
+// Resolves $EVEN_STEVEN_BOT_ENV, then ~/.even-steven/bot.env, then <root>/.env —
+// so the private key can live outside this iCloud-synced folder. See src/env.ts.
+import { ENV_FILES, envSearchList } from './env.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Address } from 'viem';
@@ -12,7 +15,12 @@ export const PROJECT_ROOT = path.resolve(__dirname, '..');
 function required(name: string): string {
   const v = process.env[name];
   if (!v || v.trim() === '') {
-    throw new Error(`Missing required env var: ${name} (see .env.example)`);
+    throw new Error(
+      `Missing required env var: ${name} (see .env.example)\n` +
+      (ENV_FILES.length
+        ? `  loaded env files (highest precedence first):\n    ${ENV_FILES.join('\n    ')}`
+        : `  NO env file was found. Looked in:\n    ${envSearchList()}`)
+    );
   }
   return v.trim();
 }
