@@ -10,7 +10,9 @@
  *
  *   node mainnet-deploy.mjs preflight     # read-only. No transactions. Run this first.
  *   node mainnet-deploy.mjs deploy-deployer  # plan step 2 ONLY (MarketDeployer), then stops
- *   node mainnet-deploy.mjs deploy        # plan steps 3-6 (factory + wiring + approval)
+ *   node mainnet-deploy.mjs deploy-factory   # plan step 3 ONLY (SportsbookFactory), then stops
+ *   node mainnet-deploy.mjs check-wiring     # plan steps 4-5, READ-ONLY
+ *   node mainnet-deploy.mjs approve-usdc     # plan step 6 ONLY (max USDC approval)
  *   node mainnet-deploy.mjs open-market   # plan step 7. Requires GAME_ID + ORACLE_Z + --confirm
  *   node mainnet-deploy.mjs verify        # post-deploy checks, read-only
  *
@@ -297,8 +299,14 @@ async function deployDeployer() {
   console.log('\n  STOP. Step 3 (SportsbookFactory) is a separate approval.')
 }
 
-async function deploy() {
-  console.log('=== DEPLOY — plan steps 3-6 (resumes after step 2) ===')
+/**
+ * Plan step 3 ONLY — deploy SportsbookFactory and stop.
+ *
+ * Deliberately does NOT run steps 4-6. The wiring check, the identifier check and
+ * the USDC approval are each their own approval: `check-wiring`, then `approve-usdc`.
+ */
+async function deployFactory() {
+  console.log('=== DEPLOY — plan step 3 ONLY (SportsbookFactory) ===')
   if (await pub.getChainId() !== 8453) die('not Base mainnet')
   const st0 = readState()
   if (st0.factory) die('a factory is already recorded in ' + STATE + ' (' + st0.factory + '). Refusing to deploy twice.')
@@ -309,25 +317,8 @@ async function deploy() {
   console.log('\n  -- step 1: compile --')
   const arts = compile()
 
-  console.log('\n  -- prerequisite: ASSERT_TRUTH2 whitelisted --')
-  const { t2 } = await identifierWhitelisted()
-  console.log('    ASSERT_TRUTH2:', t2)
-  if (!t2) die('ASSERT_TRUTH2 is not whitelisted on Base mainnet')
-
-  const dep = async (n, args = []) => {
-    const h = await w.deployContract({ abi: arts[n].abi, bytecode: arts[n].bytecode, args })
-    console.log('    ' + n + ' tx: ' + h)
-    const r = await pub.waitForTransactionReceipt({ hash: h })
-    if (r.status !== 'success') die(n + ' deployment reverted')
-    const code = await untilState(n + ' code visible', () => pub.getCode({ address: r.contractAddress }), c => c && c !== '0x')
-    const size = (code.length - 2) / 2
-    console.log('    ' + n + ' -> ' + r.contractAddress + '  block ' + r.blockNumber + ', gas ' + r.gasUsed + ', runtime ' + size + ' bytes')
-    if (size !== arts[n].size) die(n + ' on-chain size ' + size + ' != compiled ' + arts[n].size)
-    return r.contractAddress
-  }
-
-  const deployer = st0.deployer
   console.log('\n  -- step 2: MarketDeployer (already deployed) --')
+  const deployer = st0.deployer
   console.log('    reusing ' + deployer + ' from ' + STATE)
   {
     const c = await pub.getCode({ address: deployer })
@@ -335,47 +326,107 @@ async function deploy() {
     if (sz !== arts.MarketDeployer.size) die('recorded MarketDeployer has runtime ' + sz + ', expected ' + arts.MarketDeployer.size)
     console.log('    on-chain runtime ' + sz + ' bytes  OK')
   }
-  console.log('\n  -- step 3: SportsbookFactory --')
-  const factory = await dep('SportsbookFactory', [USDC, OO, deployer])
-  const F = arts.SportsbookFactory.abi
 
-  console.log('\n  -- step 4: verify deployer wiring (THE critical check) --')
+  const balBefore = await pub.getBalance({ address: w.account.address })
+  console.log('\n  -- step 3: SportsbookFactory --')
+  console.log('    constructor: _usdc=' + USDC + ' _oo=' + OO + ' _deployer=' + deployer)
+  const h = await w.deployContract({ abi: arts.SportsbookFactory.abi,
+                                     bytecode: arts.SportsbookFactory.bytecode,
+                                     args: [USDC, OO, deployer] })
+  console.log('    tx: ' + h)
+  const r = await pub.waitForTransactionReceipt({ hash: h })
+  if (r.status !== 'success') die('SportsbookFactory deployment reverted')
+  const code = await untilState('SportsbookFactory code visible',
+    () => pub.getCode({ address: r.contractAddress }), c => c && c !== '0x')
+  const size = (code.length - 2) / 2
+  if (size !== arts.SportsbookFactory.size) die('on-chain size ' + size + ' != compiled ' + arts.SportsbookFactory.size)
+  const cost = balBefore - await pub.getBalance({ address: w.account.address })
+  console.log('    address       : ' + r.contractAddress)
+  console.log('    block         : ' + r.blockNumber)
+  console.log('    gas used      : ' + r.gasUsed)
+  console.log('    effective gas : ' + r.effectiveGasPrice + ' wei (' + formatUnits(r.effectiveGasPrice, 9) + ' gwei)')
+  console.log('    cost          : ' + formatEther(cost) + ' ETH')
+  console.log('    runtime size  : ' + size + ' bytes  (expected ' + arts.SportsbookFactory.size + ')  OK')
+  writeState({ factory: r.contractAddress, factoryTx: h, factoryBlock: r.blockNumber.toString(),
+               factoryGas: r.gasUsed.toString(), factoryCostWei: cost.toString() })
+  console.log('\n  state -> ' + STATE)
+  console.log('\n  STOP. Steps 4-5 (`check-wiring`) are read-only and are the next approval.')
+}
+
+/**
+ * Plan steps 4 and 5 — READ-ONLY. Sends nothing.
+ * Step 4 is the critical one: a factory pointed at the wrong deployer would mint
+ * markets running arbitrary code.
+ */
+async function checkWiring() {
+  console.log('=== CHECK WIRING — plan steps 4-5 (read-only, no transactions) ===')
+  if (await pub.getChainId() !== 8453) die('not Base mainnet')
+  const st0 = readState()
+  if (!st0.factory) die('no factory in ' + STATE + '. Run `deploy-factory` (plan step 3) first.')
+  const arts = compile()
+  const F = arts.SportsbookFactory.abi
+  const { factory, deployer } = st0
+
+  console.log('\n  -- step 4: factory.deployer() (THE critical check) --')
   const wired = await untilState('factory.deployer()',
     () => pub.readContract({ address: factory, abi: F, functionName: 'deployer' }), v => !!v)
   console.log('    factory.deployer() =', wired)
   if (getAddress(wired) !== getAddress(deployer))
     die('factory.deployer() is ' + wired + ' but MarketDeployer is ' + deployer +
         '. A factory pointed at the wrong deployer would mint markets running arbitrary code.')
-  console.log('    MATCHES MarketDeployer')
+  console.log('    MATCHES MarketDeployer ' + deployer)
 
-  console.log('\n  -- step 5: settlementIdentifier --')
+  console.log('\n  -- step 5: settlementIdentifier and constructor wiring --')
   const sid = await readRetry(() => pub.readContract({ address: factory, abi: F, functionName: 'settlementIdentifier' }), 'sid')
   console.log('    settlementIdentifier =', sid)
   if (sid !== b32('ASSERT_TRUTH2')) die('settlementIdentifier is not ASSERT_TRUTH2. Do NOT call setSettlementIdentifier — that was Sepolia-only.')
   console.log('    == ASSERT_TRUTH2 (setSettlementIdentifier deliberately NOT called)')
+  const { t2 } = await identifierWhitelisted()
+  if (!t2) die('ASSERT_TRUTH2 is no longer whitelisted on Base mainnet')
+  console.log('    ASSERT_TRUTH2 still whitelisted on Base mainnet: true')
   const fUsdc = await readRetry(() => pub.readContract({ address: factory, abi: F, functionName: 'usdc' }), 'f.usdc')
   const fOo   = await readRetry(() => pub.readContract({ address: factory, abi: F, functionName: 'oo' }), 'f.oo')
   const fOwn  = await readRetry(() => pub.readContract({ address: factory, abi: F, functionName: 'owner' }), 'f.owner')
-  if (getAddress(fUsdc) !== getAddress(USDC)) die('factory.usdc() mismatch')
-  if (getAddress(fOo) !== getAddress(OO)) die('factory.oo() mismatch')
-  if (getAddress(fOwn) !== getAddress(w.account.address)) die('factory.owner() is not the production wallet')
-  console.log('    usdc/oo/owner all correct')
+  if (getAddress(fUsdc) !== getAddress(USDC)) die('factory.usdc() mismatch: ' + fUsdc)
+  if (getAddress(fOo) !== getAddress(OO)) die('factory.oo() mismatch: ' + fOo)
+  console.log('    usdc  =', fUsdc, ' OK')
+  console.log('    oo    =', fOo, ' OK')
+  console.log('    owner =', fOwn)
+  if (PROD && getAddress(fOwn) !== getAddress(PROD))
+    die('factory.owner() is not MAINNET_DEPLOY_WALLET (' + PROD + ')')
+  console.log('    owner == MAINNET_DEPLOY_WALLET  OK')
+  writeState({ wiringCheckedAt: new Date().toISOString() })
+  console.log('\n  STOP. Step 6 (`approve-usdc`) is the next approval and DOES send a transaction.')
+}
 
-  console.log('\n  -- step 6: approve USDC (max) to the factory --')
-  const ah = await w.writeContract({ address: USDC, abi: erc20, functionName: 'approve', args: [factory, 2n ** 256n - 1n] })
-  console.log('    approve tx: ' + ah)
-  await pub.waitForTransactionReceipt({ hash: ah })
+/** Plan step 6 ONLY — max USDC approval to the factory, then stop. */
+async function approveUsdc() {
+  console.log('=== APPROVE — plan step 6 ONLY (max USDC to the factory) ===')
+  if (await pub.getChainId() !== 8453) die('not Base mainnet')
+  const st0 = readState()
+  if (!st0.factory) die('no factory in ' + STATE + '. Run `deploy-factory` (plan step 3) first.')
+  if (!st0.wiringCheckedAt) die('wiring has not been checked. Run `check-wiring` (plan steps 4-5) first.')
+  const w = wallet()
+  const { factory } = st0
+  const balBefore = await pub.getBalance({ address: w.account.address })
+  console.log('  approving factory ' + factory + ' for type(uint256).max USDC')
+  console.log('  (Circle USDC on Base rejects exact-amount approvals intermittently)')
+  const h = await w.writeContract({ address: USDC, abi: erc20, functionName: 'approve',
+                                    args: [factory, 2n ** 256n - 1n] })
+  console.log('    tx: ' + h)
+  const r = await pub.waitForTransactionReceipt({ hash: h })
+  if (r.status !== 'success') die('approve reverted')
   const allow = await untilState('factory allowance visible',
-    () => pub.readContract({ address: USDC, abi: erc20, functionName: 'allowance', args: [w.account.address, factory] }), v => v > 0n)
-  console.log('    allowance:', allow === 2n ** 256n - 1n ? 'MAX' : f(allow))
-
-  fs.writeFileSync(STATE, JSON.stringify({ chainId: 8453, deployer, factory, owner: w.account.address,
-    deployedAt: new Date().toISOString(), seed: LAUNCH_SEED.toString() }, null, 2))
-  console.log('\n  state saved ->', STATE)
-  console.log('\n=== STEPS 1-6 COMPLETE ===')
-  console.log('  MarketDeployer   :', deployer)
-  console.log('  SportsbookFactory:', factory)
-  console.log('\n  Step 7 (createMarket) is a separate command and needs GAME_ID + ORACLE_Z + --confirm.')
+    () => pub.readContract({ address: USDC, abi: erc20, functionName: 'allowance',
+                             args: [w.account.address, factory] }), v => v > 0n)
+  const cost = balBefore - await pub.getBalance({ address: w.account.address })
+  console.log('    block         : ' + r.blockNumber)
+  console.log('    gas used      : ' + r.gasUsed)
+  console.log('    cost          : ' + formatEther(cost) + ' ETH')
+  console.log('    allowance     : ' + allow.toString() + (allow === 2n ** 256n - 1n ? '  (max)' : ''))
+  writeState({ approveTx: h, approveBlock: r.blockNumber.toString(), approveGas: r.gasUsed.toString() })
+  console.log('\n  state -> ' + STATE)
+  console.log('\n  STOP. Step 7 (`open-market`) is the next approval.')
 }
 
 async function openMarket() {
@@ -464,7 +515,11 @@ async function verify() {
 const cmd = process.argv[2]
 if (cmd === 'preflight') await preflight()
 else if (cmd === 'deploy-deployer') await deployDeployer()
-else if (cmd === 'deploy') await deploy()
+else if (cmd === 'deploy-factory') await deployFactory()
+else if (cmd === 'check-wiring') await checkWiring()
+else if (cmd === 'approve-usdc') await approveUsdc()
+else if (cmd === 'deploy') die('`deploy` ran plan steps 3-6 in one invocation. This release is ' +
+  'gated one approval at a time: use deploy-deployer, deploy-factory, check-wiring, approve-usdc.')
 else if (cmd === 'open-market') await openMarket()
 else if (cmd === 'verify') await verify()
-else { console.error('usage: mainnet-deploy.mjs preflight|deploy-deployer|deploy|open-market|verify'); process.exit(1) }
+else { console.error('usage: mainnet-deploy.mjs preflight|deploy-deployer|deploy-factory|check-wiring|approve-usdc|open-market|verify'); process.exit(1) }
