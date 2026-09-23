@@ -43,3 +43,7 @@ scripts/fork-tests/prague/node_modules/
 scripts/fork-tests/prague/cache/
 scripts/fork-tests/prague/artifacts/
 scripts/fork-tests/prague/package-lock.json
+
+# one-off mainnet smoke-test relay key (throwaway, but still a key)
+scripts/mainnet-smoke-v3-relay.json
+scripts/mainnet-deploy-v3-state.json
