@@ -1,8 +1,10 @@
 # BaseScan verification inputs — v1.11 / v1.6 (Base mainnet)
 
-**Not deployed yet.** These inputs are prepared ahead of the v3 deploy; the addresses
-below are blank until `scripts/mainnet-deploy.mjs` runs. The v1.10/v1.5 bundle in the
-parent directory is the record for the contracts that are live today — leave it alone.
+**DEPLOYED AND VERIFIED on Base mainnet, 2026-09-23.** All three passed BaseScan
+verification with optimizer runs=200 and evmVersion shanghai, confirmed by re-reading
+`getsourcecode` afterwards. Submit with `node submit.mjs`; it skips anything already
+verified. The v1.10/v1.5 bundle in the parent directory is the record for v1.5 and is
+left alone.
 
 `standard-json-input.json` is a solc Standard JSON Input containing all 8 sources
 (3 project files + 5 OpenZeppelin 4.9.3 dependencies, keyed by the exact versioned
@@ -31,13 +33,13 @@ dropdowns only need to match the compiler version.
 ## Contracts
 
 ### MarketDeployer v1.1
-- Address: _(fill in after deploy)_
+- Address: `0xb86d291104d23d47906776538db82191681257c2` — **verified**
 - Contract name: `MarketDeployer-v1_1.sol:MarketDeployer`
 - Constructor arguments: **none**
 - Expected runtime: 19,668 bytes
 
 ### SportsbookFactory v1.6
-- Address: _(fill in after deploy)_
+- Address: `0x5906370b9831728ec523b647137a1bbf0ab45390` — **verified**
 - Contract name: `SportsbookFactory-v1_6.sol:SportsbookFactory`
 - Constructor arguments: `(address _usdc, address _oo, address _deployer)`
   - `_usdc` = `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
@@ -46,7 +48,8 @@ dropdowns only need to match the compiler version.
 - Expected runtime: 8,085 bytes
 
 ### SportsbookMarket v1.11
-- Address: _(the first market created by the factory)_
+- Address: `0x1b274610a413D3FB9A4b0DE04ae13dB3598B5B13` — **verified** (the first market
+  created by the factory; verifying one market verifies the bytecode every market shares)
 - Contract name: `SportsbookMarket-v1_11.sol:SportsbookMarket`
 - Constructor arguments: `(address usdc, address oo, int256 spreadMax, int256 spreadMin,
   uint256 feePercent, bytes32 identifier, uint256 protocolSeed)` — as passed by
