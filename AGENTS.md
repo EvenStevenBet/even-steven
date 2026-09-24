@@ -213,7 +213,6 @@ Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover
 
 | Contract | Address |
 |---|---|
-| SportsbookMarket (reference) | `0xF536a69C12230FB094fA3C5850f8569957158AC2` |
 | USDC (Circle testnet) | `0x036cbd53842c5426634e7929541ec2318f3dcf7e` |
 | UMA OOV3 | `0x0F7fC5E6482f096380db6158f978167b57388deE` |
 
