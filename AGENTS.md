@@ -212,6 +212,20 @@ The route checks everything it can before submitting — request shape, market, 
 expiry — then simulates the exact contract call from the relay. Nothing is sent on-chain
 unless the simulation passes, so every error up to and including the 422s costs you nothing.
 
+**Limits.**
+- **Rate limit:** 10 requests per minute per IP, counting every request, valid or not.
+- **One submission per authorization:** the relay locks each `bettor` + `nonce` for 5
+  minutes before simulating. While it is locked, the same authorization gets
+  `409 DuplicateSubmission` and is neither simulated nor submitted. Every error returned
+  before submission releases the lock, so you can fix the problem and resend at once. Once a
+  transaction has been sent, the lock is kept for the full 5 minutes, whether it landed or
+  reverted.
+- **Revert strikes:** each submitted bet that reverts on-chain is a strike against the
+  bettor and against the IP, expiring 24 hours after the latest one. At 3 strikes (either
+  counter) the relay answers `429 TooManyFailedSubmissions` without simulating.
+- **Fails closed:** if the lock service is unreachable, the relay submits nothing and
+  answers `503 LockServiceUnavailable`.
+
 ### EIP-712 domain and type
 
 ```
@@ -398,13 +412,19 @@ or from the relay. Look the bet up later with
 Every error body is JSON: `{ "error": "<Code>", "message": "…", …details }`.
 
 **Retry rule: resend the identical request.** When the table says to retry, send the same
-body again — same `salt`, `nonce` and `signature`. EIP-3009 nonces are single-use, so an
-identical retry can never place a second bet: if the first attempt did land, the retry is
-rejected with `AuthorizationUsedOrCanceled`. Sign a new authorization (new `salt`) only
-after `GET /api/bet/status` confirms no bet was placed.
+body again — same `salt`, `nonce` and `signature`. EIP-3009 nonces are single-use and the
+relay locks each authorization, so an identical retry can never place a second bet. After
+an error returned before submission, the identical retry works immediately. After a
+submission (`SubmissionFailed`, `SubmissionPending`, `SubmissionReverted`), the same
+authorization is refused with `DuplicateSubmission` for 5 minutes.
+
+Sign a new authorization (new `salt`) only after `GET /api/bet/status` confirms no bet was
+placed **and** the old authorization's `validBefore` has passed. Until then anyone can still
+redeem the old signature through `placeBetFor`, and you would end up with two bets.
 
 | Status | `error` | Meaning | What to do |
 |---|---|---|---|
+| 429 | `RateLimited` | More than 10 requests in the current minute from your IP. `retryAfterSeconds` is included. Nothing was checked or submitted. | Retry after `retryAfterSeconds`. |
 | 400 | `InvalidRequest` | A field is missing or malformed. `field` names it; "exactly one of `marketAddress` or `gameId`" reports `field: "marketAddress"`. | Fix the request. |
 | 400 | `InvalidBettor` | `bettor` is the zero address. | Fix the request. |
 | 404 | `MarketNotFound` | No contract at `marketAddress`, or no v1.6 market for `gameId`. | Give up on this market; rediscover open markets. |
@@ -412,6 +432,9 @@ after `GET /api/bet/status` confirms no bet was placed.
 | 400 | `BadAuthorizationNonce` | `nonce` ≠ `keccak256(abi.encode(salt, greaterThan))`. `expectedNonce` is included. | Re-sign with the derived nonce. |
 | 400 | `BelowMinBet` | `stake` is under 1 USDC. | Raise the stake and re-sign. |
 | 400 | `AuthorizationExpired` | `validBefore` is not more than 30 seconds in the future. `validBefore` and `now` are included. | Re-sign with a later `validBefore`. |
+| 429 | `TooManyFailedSubmissions` | 3 (`maxStrikes`) of this bettor's or this IP's submitted bets reverted on-chain within 24 hours. Nothing was submitted. | Stop. Strikes expire 24 hours after the latest one. |
+| 409 | `DuplicateSubmission` | This `bettor` + `nonce` is in flight or was submitted in the last 5 minutes. `lockSeconds` is included. Nothing was submitted. | **Do not re-sign.** Check `GET /api/bet/status` — the earlier request probably placed the bet. |
+| 503 | `LockServiceUnavailable` | The relay's lock service is unreachable, so it refuses to submit. Nothing was submitted. | Retry later. |
 | 409 | `BettingIsClosed` | Betting on this market has closed. | Give up. |
 | 409 | `MarketEnded` | The market is settled or canceled. | Give up. |
 | 409 | `MarketFull` | The market hit its 1,000-bet cap. | Give up. |
@@ -422,11 +445,11 @@ after `GET /api/bet/status` confirms no bet was placed.
 | 502 | `RpcError` | The server could not simulate the call against the chain. | Retry after a few seconds. |
 | 503 | `RelayNotConfigured` | Server misconfiguration. Nothing was submitted. | Retry later; give up if it persists. |
 | 503 | `RelayUnderfunded` | The relay's ETH is below its safety threshold. Nothing was submitted. | Retry later while `validBefore` allows. |
-| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry. |
-| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | **Do not re-sign.** Check `txHash` or `GET /api/bet/status`. If the transaction never lands, retry. |
-| 502 | `SubmissionReverted` | Mined but reverted — usually the market changed between simulation and inclusion (for example, betting closed). `txHash` is included. The revert rolled back your authorization, so it is still unused. | Retry once; a 409 on the retry means give up. |
+| 502 | `SubmissionFailed` | The transaction could not be sent. | Check `GET /api/bet/status`. If no bet landed, retry after the 5-minute lock while `validBefore` allows. |
+| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | **Do not re-sign.** Check `txHash` or `GET /api/bet/status`. If the transaction never lands, retry after the 5-minute lock. |
+| 502 | `SubmissionReverted` | Mined but reverted — usually the market changed between simulation and inclusion (for example, betting closed). `txHash` is included. The revert rolled back your authorization, so it is still unused. Counts as a strike. | Give up, or retry once after the 5-minute lock while `validBefore` allows; a 409 on the retry means give up. |
 | 500 | `CustodyInvariantViolated` | The receipt did not match your bet. Should never happen. `txHash` is included. | Stop and report the `txHash`. |
-| 500 | `InternalError` | Unexpected server error. | Check `GET /api/bet/status`, then retry. |
+| 500 | `InternalError` | Unexpected server error. | Check `GET /api/bet/status`, then retry. A `DuplicateSubmission` means the authorization is locked; wait up to 5 minutes. |
 
 `AuthorizationRejected` reasons:
 
