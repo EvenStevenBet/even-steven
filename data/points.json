@@ -1,0 +1,22 @@
+{
+  "updatedAt": "2026-09-28T05:07:34.513Z",
+  "pointsPerUsdc": 100,
+  "refPointsPerUsdc": 50,
+  "factory": "0x5906370b9831728ec523b647137a1bbf0ab45390",
+  "markets": 2,
+  "bets": 4,
+  "addresses": [
+    {
+      "address": "0x1164a458a716289c3d724fd1b3a8f5072593271e",
+      "total": 400,
+      "betPoints": 400,
+      "referralPoints": 0
+    },
+    {
+      "address": "0x2e5ff49699f0da2e8a6a43f34bffc1c740e67916",
+      "total": 100,
+      "betPoints": 100,
+      "referralPoints": 0
+    }
+  ]
+}

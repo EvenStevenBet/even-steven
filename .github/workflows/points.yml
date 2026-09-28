@@ -1,0 +1,40 @@
+name: Points
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: points
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # commits data/points.json
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: scripts
+      - run: node --test scripts/points.test.mjs
+      - run: node scripts/points.mjs
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_READ_ONLY_TOKEN: ${{ secrets.KV_REST_API_READ_ONLY_TOKEN }}
+          POINTS_PER_USDC: ${{ vars.POINTS_PER_USDC || '100' }}
+          REF_POINTS_PER_USDC: ${{ vars.REF_POINTS_PER_USDC || '50' }}
+      - name: Commit points.json if it changed
+        run: |
+          if git diff --quiet -- data/points.json; then echo "no change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/points.json
+          git commit -m "data: update points"
+          git pull --rebase origin main
+          git push origin HEAD:main
