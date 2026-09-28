@@ -277,6 +277,21 @@ not reusable:
 | `salt` | bytes32 hex | 32 random bytes you choose. Fresh for every bet. |
 | `nonce` | bytes32 hex | `keccak256(abi.encode(salt, greaterThan))`. This is the EIP-3009 nonce you sign. |
 | `signature` | hex bytes | Your EIP-712 signature: 65 bytes (`r‖s‖v`) from an EOA, or whatever your smart-contract wallet produces. |
+| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+
+#### Builder codes and refs
+
+Approved builders — cappers, agents, apps, group-chat bots — earn **30% of the 2% taker fee**
+on the bets they route, computed weekly and paid manually in USDC after review. Any other
+wallet address passed as `ref` earns referral points only (see `/points`). To get a builder
+code, email evenstevenbet@gmail.com.
+
+When `ref` resolves, the relay appends it to the bet transaction's calldata as an
+ERC-8021 schema-0 suffix, so every attributed bet
+carries its ref on-chain. The market ignores trailing calldata; nothing about the bet changes.
+A `ref` that pays the bettor (your own address, or a builder code whose payout address is
+yours) is dropped: self-referral earns nothing. Only the holder of the signed authorization
+can submit it, so only the submitter chooses the ref.
 
 **Why the nonce is derived, not random.** The signature covers `from`, `to`, `value`,
 `validAfter`, `validBefore` and `nonce` — but not which side you are betting. With a random
@@ -401,6 +416,8 @@ The first mainnet bet placed through the relay
   readable form.
 - `fee` is the taker fee actually charged.
 - `relay` is the address that submitted the transaction and paid its gas.
+- `ref` appears only when you sent a `ref` that resolved and the bet was recorded with it.
+  Its absence means the bet was placed without attribution, never that the bet failed.
 
 The route answers only after the transaction is mined and it has checked the receipt: there
 must be exactly one `BetPlaced` event, its bettor must be you, and no USDC may have moved to

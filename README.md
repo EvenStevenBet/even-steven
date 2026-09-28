@@ -405,7 +405,7 @@ Per `Web App/lib/markets.ts`, the `status` column is one of:
 | `open` | Accepting bets |
 | `closed` | Game over, UMA assertion in its ~2-hour liveness window |
 | `settled` | Settlement finalized, payouts claimable |
-| `cancelled` | `cancelMarket()` called — full stake refund (no fee), 90-day claim window |
+| `cancelled` | `cancelMarket()` called — full stake refund (the 2% fee is not refunded), 90-day claim window |
 | `refund` | 7-day safety-net backstop — market never settled, anyone can call `triggerRefund()` |
 | `expired` | Past its date with no market ever opened (sheet-managed) |
 
