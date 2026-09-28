@@ -511,12 +511,78 @@ A real `422`, from the example request above sent by a wallet with no USDC:
 }
 ```
 
-### Claiming
+### Claiming via the relay (POST /api/claim)
 
-There is no claim endpoint yet; the relay does not claim for you. On v1.11 markets anyone
-may call `claimPayoutFor(bettor, betIds)` and the payout always goes to `bettor`, or you can
-call `claimPayout` / `claimAllPayouts` yourself, which needs a little ETH. See **Claiming**
-below.
+`POST https://evensteven.bet/api/claim` collects everything a bettor is owed on one market,
+gaslessly. The relay finds the bettor's claimable bets and submits one
+`claimPayoutFor(bettor, betIds)` (see **Relayed claiming** below), paying the ETH gas. The
+market sends the USDC straight to `bettor`; the relay never touches it.
+
+- **Free.** No x402 fee, no `X-PAYMENT` header, and nothing to sign: `claimPayoutFor` can
+  only pay the bettor recorded on each bet, so anyone may ask for a claim on anyone's behalf.
+- **Supported markets:** only markets created by SportsbookFactory v1.6 (SportsbookMarket
+  v1.11). Older markets return `409 UnsupportedMarket`; claim those directly with
+  `claimPayout` / `claimAllPayouts`, which needs a little ETH.
+- **What it claims:** every bet of `bettor` on `marketAddress` that would pay right now —
+  winning bets after settlement, every bet in refund mode. Each unclaimed id is simulated on
+  its own first, so losing, already-claimed and not-yet-claimable ids are left out rather
+  than reverting the batch.
+
+Request:
+
+```json
+{ "marketAddress": "0x...", "bettor": "0x..." }
+```
+
+Success (`200`) — the route answers after the transaction is mined and its receipt checked.
+Integers are decimal strings; `amount` is USDC base units (6 decimals):
+
+```json
+{
+  "success": true,
+  "bettor": "0x...",
+  "marketAddress": "0x...",
+  "betIds": ["0", "1"],
+  "amount": "33000000",
+  "txHash": "0x...",
+  "relay": "0x8a3eee4f6aD1c03Dc3d898ecD61283560Bd42fed"
+}
+```
+
+Nothing to claim (`200`, no transaction sent) — the bettor lost, already claimed, has no bets
+here, the market is not settled or canceled yet, or the 90-day claim window has closed:
+
+```json
+{ "claimed": [], "note": "Nothing claimable" }
+```
+
+Before answering `200 success` the route checks the receipt: exactly one `BetClaimed` per
+claimed id with your address as bettor, one `PayoutClaimed` to you whose amount equals the
+sum of those payouts, a USDC transfer of that amount from the market to you, and no USDC to
+or from the relay.
+
+**Limits.** 10 requests per minute per IP. A submitted claim holds a 5-minute lock on
+`marketAddress` + `bettor`: a repeat request in that window either finds nothing left to
+claim or gets `409 ClaimInFlight`, and never sends a second transaction.
+
+| Status | `error` | Meaning | What to do |
+|---|---|---|---|
+| 429 | `RateLimited` | More than 10 requests in the current minute from your IP. `retryAfterSeconds` is included. | Retry after `retryAfterSeconds`. |
+| 400 | `InvalidRequest` | `marketAddress` or `bettor` is missing or not an address. `field` names it. | Fix the request. |
+| 400 | `InvalidBettor` | `bettor` is the zero address. | Fix the request. |
+| 404 | `MarketNotFound` | No contract at `marketAddress`. | Fix the address. |
+| 409 | `UnsupportedMarket` | Not a SportsbookFactory v1.6 market. `factory` is included. | Claim directly with `claimPayout` / `claimAllPayouts`. |
+| 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 5 minutes. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
+| 409 | contract error name | The market rejected the batch between the per-bet check and submission — for example `AlreadyClaimed` when someone else claimed first. Nothing was submitted. | Retry once; a `Nothing claimable` answer means the money already reached you. |
+| 503 | `LockServiceUnavailable` | The relay's lock service is unreachable, so it refuses to submit. Nothing was submitted. | Retry later. |
+| 502 | `RpcError` | The server could not read or simulate against the chain. | Retry after a few seconds. |
+| 503 | `RelayNotConfigured` | Server misconfiguration. Nothing was submitted. | Retry later, or claim directly. |
+| 503 | `RelayUnderfunded` | The relay's ETH is below its safety threshold. Nothing was submitted. | Retry later, or claim directly. |
+| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 5-minute lock. |
+| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 5-minute lock. |
+| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved. | Retry after the 5-minute lock. |
+| 500 | `CustodyInvariantViolated` | The receipt did not match the requested claim. Should never happen. `txHash` is included. | Stop and report the `txHash`. |
+| 500 | `InternalError` | Unexpected server error. | Check your balance, then retry. |
 
 ---
 
@@ -896,7 +962,8 @@ on the text:
 > **R6-9 does NOT apply to markets created by Factory v1.6** (SportsbookMarket v1.11).
 > Those expose `claimPayoutFor`, so anyone can claim on your behalf and you never need ETH
 > at all. Check which factory created the market before assuming you need gas — see
-> **Relayed claiming** below. Even Steven's relay does not yet offer a claim endpoint.
+> **Relayed claiming** below, or ask Even Steven's relay to claim for you with
+> `POST /api/claim` (see **Claiming via the relay** above).
 
 Claiming your own payout directly works on every version:
 
