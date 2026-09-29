@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Lifecycle operations for a single live SportsbookMarket v1.10 on Base mainnet.
+ * Lifecycle operations for a single live SportsbookMarket (v1.10 or v1.11) on Base mainnet.
  *
  *   node market-ops.mjs state                          # read-only
  *   node market-ops.mjs close --confirm                # closeBetting()
@@ -28,7 +28,13 @@ if (fs.existsSync(path.resolve(HERE, '.env'))) dotenv.config({ path: path.resolv
 
 const MARKET = getAddress(process.env.MARKET || '0x05170a958B4a1F70Fd8c6495F650475bCcbE43e9')
 const USDC   = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
-const PROD   = '0x6cF0A0b5282409E24dC35e2c1834f9111315603B'
+// Wallets allowed to sign owner-level writes. Each market is owned by whoever created it:
+// v1.5-era markets by the old production wallet, Factory v1.6 markets by the v3 owner.
+// wallet() further requires the key to be THIS market's owner() on chain.
+const OWNERS = [
+  '0x6cF0A0b5282409E24dC35e2c1834f9111315603B', // Factory v1.5 era
+  '0x2e5Ff49699f0dA2E8A6a43f34BffC1c740E67916', // v3 owner, Factory v1.6
+].map(a => getAddress(a))
 /**
  * RPC selection, in order: MAINNET_RPC > ALCHEMY_RPC_URL > ALCHEMY_KEY > public.
  *
@@ -71,6 +77,8 @@ const M = parseAbi([
   'function finalSpread() view returns (int256)', 'function settledAt() view returns (uint256)',
   'function bettingClosedAt() view returns (uint256)', 'function owner() view returns (address)',
   'function getSettlementBond() view returns (uint256)', 'function cachedWinningStakes() view returns (uint256)',
+  'function SPREAD_MIN() view returns (int256)', 'function SPREAD_MAX() view returns (int256)',
+  'function MIN_BOND() view returns (uint256)',
   'function closeBetting()', 'function requestSettlement(int256)', 'function executeSettlement()',
   'function triggerRefund()', 'function canTriggerRefund() view returns (bool)',
   'event RefundTriggered(address indexed by)',
@@ -82,14 +90,25 @@ const E = parseAbi(['function balanceOf(address) view returns (uint256)',
                     'function approve(address,uint256) returns (bool)',
                     'function allowance(address,address) view returns (uint256)'])
 
-function wallet() {
+const r = (fn, args) => pub.readContract({ address: MARKET, abi: M, functionName: fn, args })
+
+async function wallet() {
   const k = (process.env.MAINNET_PRIVATE_KEY || '').trim()
   if (!k) die('MAINNET_PRIVATE_KEY not set')
   const a = privateKeyToAccount(k)
-  if (getAddress(a.address) !== getAddress(PROD)) die('key is not the production wallet')
+  const signer = getAddress(a.address)
+  if (!OWNERS.includes(signer)) die(`key derives ${signer}, which is not a known owner wallet`)
+  const owner = getAddress(await r('owner'))
+  if (signer !== owner) die(`key derives ${signer}, but this market's owner() is ${owner}`)
+  console.log('signer :', signer, '(market owner)')
   return createWalletClient({ account: a, chain: base, transport: http(RPC, { timeout: 120000 }) })
 }
-const r = (fn, args) => pub.readContract({ address: MARKET, abi: M, functionName: fn, args })
+
+// gameId: SPORT-YYYY-MM-DD-HOME-<home>-AWAY-<away>[-G1]
+function teams(gameId) {
+  const m = /-HOME-(.+?)-AWAY-(.+?)(-G[12])?$/.exec(gameId)
+  return m ? { home: m[1].replace(/-/g, ' '), away: m[2].replace(/-/g, ' ') } : { home: 'HOME', away: 'AWAY' }
+}
 async function untilState(label, read, want, tries = 40) {
   for (let i = 0; i < tries; i++) { try { const v = await read(); if (want(v)) return v } catch (e) {} 
     await new Promise(s => setTimeout(s, 2000)) }
@@ -110,14 +129,17 @@ async function state() {
                            ' finalSpread:', (await r('finalSpread')).toString(),
                            ' winningStakes:', f(await r('cachedWinningStakes')))
   console.log('UMA bond required:', f(await r('getSettlementBond')), 'USDC (market floors at 100)')
-  console.log('prod wallet USDC :', f(await pub.readContract({ address: USDC, abi: E, functionName: 'balanceOf', args: [PROD] })))
-  console.log('prod wallet ETH  :', formatEther(await pub.getBalance({ address: PROD })))
+  const owner = getAddress(await r('owner'))
+  console.log('owner            :', owner)
+  console.log('owner USDC       :', f(await pub.readContract({ address: USDC, abi: E, functionName: 'balanceOf', args: [owner] })))
+  console.log('owner ETH        :', formatEther(await pub.getBalance({ address: owner })))
+  console.log('owner allowance  :', f(await pub.readContract({ address: USDC, abi: E, functionName: 'allowance', args: [owner, MARKET] })), 'USDC to this market')
 }
 
 async function close() {
   if (!process.argv.includes('--confirm')) die('refusing without --confirm')
   if (!(await r('bettingOpen'))) die('betting is already closed')
-  const w = wallet()
+  const w = await wallet()
   const h = await w.writeContract({ address: MARKET, abi: M, functionName: 'closeBetting' })
   console.log('closeBetting tx:', h)
   const rc = await pub.waitForTransactionReceipt({ hash: h })
@@ -133,28 +155,35 @@ async function close() {
 async function requestSettlement() {
   const raw = process.argv[3]
   if (raw === undefined || raw.startsWith('--')) die('usage: request-settlement <finalSpread> --confirm')
+  if (!/^-?\d+$/.test(raw)) die('finalSpread must be a whole number (home score minus away score)')
   const spread = BigInt(raw)
-  if (spread < -100n || spread > 100n) die('finalSpread outside the market SPREAD_MIN/MAX (-100..100)')
+  const [min, max] = [await r('SPREAD_MIN'), await r('SPREAD_MAX')]
+  if (spread < min || spread > max) die(`finalSpread ${spread} outside this market's SPREAD_MIN/MAX (${min}..${max})`)
   if (!process.argv.includes('--confirm')) die('refusing without --confirm')
   if (await r('bettingOpen')) die('betting is still open — close it first')
   if (await r('settled')) die('already settled')
   if (await r('assertionActive')) die('an assertion is already pending')
 
-  const w = wallet()
+  const w = await wallet()
+  const signer = w.account.address
   const bond = await r('getSettlementBond')
-  const need = bond > 100000000n ? bond : 100000000n
-  const bal = await pub.readContract({ address: USDC, abi: E, functionName: 'balanceOf', args: [PROD] })
-  console.log('finalSpread:', spread.toString(), '(positive = Bills won by that margin)')
+  const floor = await r('MIN_BOND')
+  const need = bond > floor ? bond : floor
+  const bal = await pub.readContract({ address: USDC, abi: E, functionName: 'balanceOf', args: [signer] })
+  const gid = await r('gameId'), t = teams(gid)
+  const reading = spread > 0n ? `${t.home} (home) won by ${spread}` : spread < 0n ? `${t.away} (away) won by ${-spread}` : 'tie'
+  console.log('gameId     :', gid)
+  console.log('finalSpread:', spread.toString(), '=>', reading, ' (home score minus away score)')
   console.log('bond       :', f(need), 'USDC   wallet:', f(bal))
   if (bal < need) die('insufficient USDC for the bond')
 
-  const allow = await pub.readContract({ address: USDC, abi: E, functionName: 'allowance', args: [PROD, MARKET] })
+  const allow = await pub.readContract({ address: USDC, abi: E, functionName: 'allowance', args: [signer, MARKET] })
   if (allow < need) {
     console.log('  approving USDC to the market...')
     await pub.waitForTransactionReceipt({ hash: await w.writeContract({
       address: USDC, abi: E, functionName: 'approve', args: [MARKET, 2n ** 256n - 1n] }) })
     await untilState('allowance visible',
-      () => pub.readContract({ address: USDC, abi: E, functionName: 'allowance', args: [PROD, MARKET] }), v => v >= need)
+      () => pub.readContract({ address: USDC, abi: E, functionName: 'allowance', args: [signer, MARKET] }), v => v >= need)
   }
   const h = await w.writeContract({ address: MARKET, abi: M, functionName: 'requestSettlement', args: [spread] })
   console.log('requestSettlement tx:', h)
@@ -173,7 +202,7 @@ async function executeSettlement() {
   if (!process.argv.includes('--confirm')) die('refusing without --confirm')
   if (await r('settled')) die('already settled')
   if (!(await r('assertionActive'))) die('no active assertion — run request-settlement first')
-  const w = wallet()
+  const w = await wallet()
   const h = await w.writeContract({ address: MARKET, abi: M, functionName: 'executeSettlement' })
   console.log('executeSettlement tx:', h)
   const rc = await pub.waitForTransactionReceipt({ hash: h })
