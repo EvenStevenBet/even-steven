@@ -27,7 +27,9 @@ jobs:
         env:
           BOT_ENABLED: ${{ secrets.BOT_ENABLED }}
           DRY_RUN: ${{ secrets.DRY_RUN }}
-          MAX_OPEN_MARKETS: ${{ secrets.MAX_OPEN_MARKETS }}
+          # A repository variable, not a secret: secrets mask every occurrence of their value in logs,
+          # so a secret "3" hid every 3 in addresses and tx hashes. Unset = the bot's default (3).
+          MAX_OPEN_MARKETS: ${{ vars.MAX_OPEN_MARKETS }}
           APPROVAL_TOKEN: ${{ secrets.APPROVAL_TOKEN }}
           RPC_URL: ${{ secrets.RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
