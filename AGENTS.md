@@ -71,9 +71,14 @@ const data = await res.json();
 
 Install with `npm install x402-fetch`.
 
-Even Steven's mainnet endpoints settle through the Coinbase CDP facilitator. Agents running
-their own x402 client are not required to use CDP — any compatible facilitator on Base works,
-since payment verification is against the on-chain USDC transfer, not a specific facilitator.
+Even Steven's mainnet endpoints verify and settle payments through the Coinbase CDP
+facilitator. The server chooses the facilitator, not you: your client only signs the USDC
+authorization described in the `402` response and never contacts a facilitator itself, so any
+x402 client that supports the `exact` scheme on Base (network `base`) works. The facilitator
+submits the transfer and pays its gas; you need USDC, not ETH.
+
+The three paid endpoints are listed in the x402 Bazaar (CDP discovery) under
+`payTo` `0x6cF0A0b5282409E24dC35e2c1834f9111315603B`, with input and output schemas.
 
 ### Endpoints
 
