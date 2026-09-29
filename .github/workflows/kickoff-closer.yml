@@ -1,0 +1,52 @@
+name: Kickoff closer
+# Closes betting at each open market's gameDate (minus CLOSE_LEAD_SECONDS) with no clicks.
+# One watcher job runs while any open market exists, sleeping until the next close is due;
+# before the 6-hour job limit it dispatches its own successor. The market-opener bot dispatches
+# this workflow right after every new market; the schedule is only a watchdog that (re)starts a
+# watcher if none is running — GitHub's cron alone fires hours apart.
+on:
+  schedule:
+    - cron: '5,35 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'One read-only pass: print the plan, simulate due closes, send nothing'
+        type: boolean
+        default: false
+
+concurrency:
+  group: kickoff-closer
+  cancel-in-progress: false  # never cancel a watcher that may be about to close a market
+
+permissions:
+  contents: write  # status=closed write-back to data/markets.csv
+  actions: write   # the watcher dispatches its successor
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: scripts
+      - run: node --test scripts/kickoff-closer.test.mjs
+      - id: watch
+        run: node scripts/kickoff-closer.mjs
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+          PRODUCTION_WALLET: ${{ secrets.PRODUCTION_WALLET }}
+          FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOSE_LEAD_SECONDS: ${{ vars.CLOSE_LEAD_SECONDS || '60' }}
+          DRY_RUN: ${{ (inputs.dry_run && 'true') || vars.KICKOFF_CLOSER_DRY_RUN || 'false' }}
+      - name: Hand off to a fresh watcher
+        # always(): a watcher that fails (an untimed market) still hands off if it was watching others
+        if: always() && steps.watch.outputs.rearm == 'true'
+        run: gh workflow run kickoff-closer.yml --ref "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
