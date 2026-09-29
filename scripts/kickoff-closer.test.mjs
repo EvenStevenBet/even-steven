@@ -1,7 +1,7 @@
 // node --test scripts/kickoff-closer.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseCsv, parseGameDate, plan, shouldHandOff } from './kickoff-closer.mjs'
+import { outcome, parseCsv, parseGameDate, plan, shouldHandOff } from './kickoff-closer.mjs'
 
 const T = Date.parse('2026-09-29T00:15:00Z') // MNF kickoff
 
@@ -49,4 +49,11 @@ test('parseCsv reads gameDate and status by gameId, tolerating CRLF and blank ro
   const rows = parseCsv(csv)
   assert.equal(rows.size, 1)
   assert.deepEqual(rows.get('NFL-2026-09-28-HOME-Bears-AWAY-Eagles'), { gameDate: '2026-09-29T00:15:00Z', status: 'open' })
+})
+
+test('outcome: an untimed market fails the job, but never at the expense of a timed one', () => {
+  assert.equal(outcome({ timedRemaining: 1, untimedRemaining: 1, iterationFailed: false }), 'continue')
+  assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 1, iterationFailed: false }), 'fail')
+  assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 0, iterationFailed: false }), 'done')
+  assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 0, iterationFailed: true }), 'continue')
 })

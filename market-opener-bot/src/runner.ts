@@ -16,6 +16,7 @@ import {
   botAddress,
 } from './chain.js';
 import { log } from './logger.js';
+import { dispatchKickoffCloser } from './dispatch.js';
 
 /**
  * Closes betting on any currently-open market whose game has reached its
@@ -191,6 +192,7 @@ async function main(): Promise<void> {
   });
 
   let deployed = 0;
+  let dispatchFailed = false;
 
   for (const row of candidates) {
     if (openCount >= config.maxOpenMarkets) {
@@ -242,6 +244,23 @@ async function main(): Promise<void> {
       openCount += 1;
       deployed += 1;
 
+      // Start the watcher that closes betting at kickoff. A failure here doesn't undo the
+      // deployment, but it fails this run (below) so GitHub notifies: without a watcher,
+      // nothing closes this market on time.
+      try {
+        await dispatchKickoffCloser();
+        log({ event: 'kickoff_closer_dispatched', gameId: row.gameId, marketAddress });
+      } catch (err) {
+        dispatchFailed = true;
+        log({
+          event: 'kickoff_closer_dispatch_failed',
+          gameId: row.gameId,
+          marketAddress,
+          error: err instanceof Error ? err.message : String(err),
+          detail: 'Run the Kickoff closer workflow by hand now, or close this market manually at kickoff.',
+        });
+      }
+
       await writeMarketResult(row.rowNumber, marketAddress, 'open');
       log({ event: 'sheet_updated', gameId: row.gameId, row: row.rowNumber, marketAddress });
     } catch (err) {
@@ -256,6 +275,7 @@ async function main(): Promise<void> {
   }
 
   log({ event: 'run_complete', mode, deployed, closed: closedCount, openMarketsNow: openCount });
+  if (dispatchFailed) process.exitCode = 1;
 }
 
 main().catch((err) => {

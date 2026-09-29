@@ -5,7 +5,8 @@
 //
 // Opens a real Factory v1.6 market (impersonating the owner) with kickoff 75s out, places a bet,
 // runs kickoff-closer.mjs unmodified against it with CLOSE_LEAD_SECONDS=30, then asserts that
-// betting closed 25–35s before kickoff and that a bet after the close reverts.
+// betting closed 25–35s before kickoff and that a bet after the close reverts. A second market
+// with no CSV row must be left alone, raise a GitHub ::error, and fail the run without re-arming.
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
@@ -53,6 +54,9 @@ const gameId = `NFL-${kickoff.toISOString().slice(0, 10)}-HOME-Testers-AWAY-Fork
 const created = await pub.waitForTransactionReceipt({ hash: await owner.writeContract({ address: FACTORY, abi: factoryAbi, functionName: 'createMarket', args: [gameId, 0n, 1_000_000n] }) })
 const market = parseEventLogs({ abi: factoryAbi, eventName: 'MarketCreated', logs: created.logs })[0].args.market
 check(await pub.readContract({ address: market, abi: marketAbi, functionName: 'bettingOpen' }), 'market opened on the fork', market)
+const orphanId = `${gameId}-NOROW`
+const orphanRc = await pub.waitForTransactionReceipt({ hash: await owner.writeContract({ address: FACTORY, abi: factoryAbi, functionName: 'createMarket', args: [orphanId, 0n, 1_000_000n] }) })
+const orphan = parseEventLogs({ abi: factoryAbi, eventName: 'MarketCreated', logs: orphanRc.logs })[0].args.market
 
 // 2. A bet before kickoff goes through.
 const slot = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'uint256' }], [BETTOR, 9n])) // FiatTokenV2_2 balances
@@ -79,7 +83,9 @@ const code = await new Promise((resolve) => {
   child.on('exit', resolve)
   setTimeout(() => child.kill(), 180_000)
 })
-check(code === 0, 'closer exited cleanly once nothing was left open')
+check(code === 1, 'closer exited non-zero: only an untimed market was left')
+check(logs.some((l) => l.startsWith('::error') && l.includes(orphanId)), 'GitHub ::error annotation names the untimed market')
+check(await pub.readContract({ address: orphan, abi: marketAbi, functionName: 'bettingOpen' }), 'untimed market left open (never guessed)')
 
 // 4. Closed on time, and bets are refused after.
 const closedAt = Number(await pub.readContract({ address: market, abi: marketAbi, functionName: 'bettingClosedAt' }))

@@ -10,6 +10,7 @@ concurrency:
 
 permissions:
   contents: write  # required for CSV commit write-back
+  actions: write   # dispatches kickoff-closer.yml after every new market
 
 jobs:
   run:

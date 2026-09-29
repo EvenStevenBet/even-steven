@@ -71,6 +71,18 @@ export function shouldHandOff({ elapsedSeconds, nextCloseAtMs, nowMs, maxRuntime
   return nextCloseAtMs === null || nextCloseAtMs - nowMs > quietSeconds * 1000
 }
 
+/**
+ * Pure. What the watcher does after an iteration.
+ * A market it can't time (no CSV row, or a bad gameDate) is never guessed at; it fails the job
+ * so GitHub notifies. With timed markets still open the watcher keeps closing those and fails
+ * at the end of its run; with only untimed markets left it fails at once and does not re-arm
+ * (the cron retries, and each retry fails again until the row is fixed).
+ */
+export function outcome({ timedRemaining, untimedRemaining, iterationFailed }) {
+  if (iterationFailed || timedRemaining > 0) return 'continue'
+  return untimedRemaining > 0 ? 'fail' : 'done'
+}
+
 /** Pure. Rows by gameId from the 11-column markets.csv (no quoted fields, same as the bot). */
 export function parseCsv(text) {
   const rows = new Map()
@@ -218,36 +230,55 @@ async function main() {
   const started = Date.now()
   let csvRows = new Map(), csvReadAt = 0
   const warned = new Set()
+  let sawUntimed = false
   log('start', { owner: chain.owner, factory: chain.factory, dryRun, ...cfg })
 
   for (;;) {
-    let next = null, remaining = 0
+    let next = null, timedRemaining = 0, untimedRemaining = 0, iterationFailed = false
     try {
       if (Date.now() - csvReadAt > 5 * 60_000) { csvRows = parseCsv(await readCsvText()); csvReadAt = Date.now() }
       const markets = await openOwnedMarkets(chain, csvRows)
       const p = plan(markets, Date.now(), cfg.leadSeconds)
       for (const m of p.unknown) {
-        if (!warned.has(m.address)) { warned.add(m.address); log('cannot_time_market', { gameId: m.gameId, market: m.address, gameDate: csvRows.get(m.gameId)?.gameDate ?? null }) }
+        if (warned.has(m.address)) continue
+        warned.add(m.address)
+        sawUntimed = true
+        const gameDate = csvRows.get(m.gameId)?.gameDate ?? null
+        log('cannot_time_market', { gameId: m.gameId, market: m.address, gameDate })
+        console.log(`::error title=Kickoff closer cannot time a market::${m.gameId} (${m.address}) has ${gameDate === null ? 'no row in data/markets.csv' : `an invalid gameDate "${gameDate}"`}. Fix the row or close it by hand.`)
       }
       let closedNow = 0
       for (const m of p.due) {
         try { if (await closeOne(chain, m, dryRun)) closedNow++ } catch (err) { log('close_failed', { gameId: m.gameId, market: m.address, error: err.shortMessage ?? err.message }) }
       }
       next = p.next
-      remaining = markets.length - closedNow
+      untimedRemaining = p.unknown.length
+      timedRemaining = markets.length - p.unknown.length - closedNow
       if (dryRun) {
         log('dry_run_plan', { open: markets.length, due: p.due.length, next: p.next && { gameId: p.next.gameId, closeAt: new Date(p.next.closeAtMs).toISOString() }, untimed: p.unknown.length })
+        if (sawUntimed) process.exitCode = 1
         return setOutput('rearm', 'false')
       }
     } catch (err) {
       log('iteration_failed', { error: err.shortMessage ?? err.message })
-      remaining = Math.max(remaining, 1) // unknown state: keep watching rather than exit
+      iterationFailed = true // unknown state: keep watching rather than exit
     }
 
-    if (remaining === 0) { log('nothing_open', {}); return setOutput('rearm', 'false') }
+    const result = outcome({ timedRemaining, untimedRemaining, iterationFailed })
+    if (result === 'done') {
+      log('nothing_open', {})
+      if (sawUntimed) process.exitCode = 1
+      return setOutput('rearm', 'false')
+    }
+    if (result === 'fail') {
+      log('only_untimed_markets_left', { untimedRemaining })
+      process.exitCode = 1
+      return setOutput('rearm', 'false')
+    }
     const now = Date.now()
     if (shouldHandOff({ elapsedSeconds: (now - started) / 1000, nextCloseAtMs: next?.closeAtMs ?? null, nowMs: now, ...cfg })) {
-      log('handing_off', { remaining })
+      log('handing_off', { timedRemaining, untimedRemaining })
+      if (sawUntimed) process.exitCode = 1
       return setOutput('rearm', 'true')
     }
     const untilNext = next ? next.closeAtMs - now : Infinity
