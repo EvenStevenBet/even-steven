@@ -51,7 +51,12 @@ see **Placing a bet via the relay (POST /api/bet)** below.
    the response body, per the x402 spec.
 3. Agent's x402 client signs a USDC payment authorization and retries the request with an
    `X-PAYMENT` header.
-4. Server verifies and settles the payment against the facilitator, then returns the data.
+4. Server verifies the payment, runs the request, and **settles only if the answer is
+   `2xx`**. A `400`, `404` or `409` (bad parameters, unknown `gameId`, market not open) is
+   returned as-is and costs you nothing: your authorization is never submitted. A `2xx` is
+   released only after the payment settles, with an `X-PAYMENT-RESPONSE` header (base64
+   JSON: `success`, `transaction`, `network`, `payer`) naming the settlement transaction. If
+   settlement fails you get a `402` and no data.
 
 The easiest way to consume these endpoints is `x402-fetch`:
 
