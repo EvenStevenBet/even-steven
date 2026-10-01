@@ -231,6 +231,7 @@ async function main() {
   let csvRows = new Map(), csvReadAt = 0
   const warned = new Set()
   let sawUntimed = false
+  let announced = null
   log('start', { owner: chain.owner, factory: chain.factory, dryRun, ...cfg })
 
   for (;;) {
@@ -252,6 +253,10 @@ async function main() {
         try { if (await closeOne(chain, m, dryRun)) closedNow++ } catch (err) { log('close_failed', { gameId: m.gameId, market: m.address, error: err.shortMessage ?? err.message }) }
       }
       next = p.next
+      if (next && !dryRun && announced !== `${next.address}:${next.closeAtMs}`) {
+        announced = `${next.address}:${next.closeAtMs}`
+        log('next_close', { gameId: next.gameId, market: next.address, gameDate: new Date(next.gameDateMs).toISOString(), closeAt: new Date(next.closeAtMs).toISOString(), leadSeconds: cfg.leadSeconds })
+      }
       untimedRemaining = p.unknown.length
       timedRemaining = markets.length - p.unknown.length - closedNow
       if (dryRun) {
