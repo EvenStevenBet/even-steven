@@ -47,3 +47,9 @@ test('fractional stakes floor per bet', () => {
   const bets = [{ marketAddress: M, betId: 0n, bettor: alice, stake: 1_234_567n }]
   assert.equal(computePoints(bets, [], rates)[0].betPoints, 123)
 })
+
+test('Even Steven\'s own builder code never earns referral points', () => {
+  const bets = [{ marketAddress: M, betId: 0n, bettor: alice, stake: 1_000_000n }]
+  const records = [{ marketAddress: M, betId: '0', ref: 'bc_ncytgilx', refAddress: carol, stake: '1000000' }]
+  assert.deepEqual(computePoints(bets, records, rates).map((r) => r.address), [alice])
+})
