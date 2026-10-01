@@ -296,7 +296,10 @@ on the bets they route, computed weekly and paid manually in USDC after review. 
 wallet address passed as `ref` earns referral points only (see `/points`). To get a builder
 code, email evenstevenbet@gmail.com.
 
-When `ref` resolves, the relay appends it to the bet transaction's calldata as an
+Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base
+builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution.
+It is not a ref and earns nothing. When `ref` resolves, the relay adds it to the same suffix,
+alongside `bc_ncytgilx`, as an
 ERC-8021 schema-0 suffix, so every attributed bet
 carries its ref on-chain. The market ignores trailing calldata; nothing about the bet changes.
 A `ref` that pays the bettor (your own address, or a builder code whose payout address is

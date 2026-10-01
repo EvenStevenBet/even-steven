@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url'
 export const V1_6_FACTORY = '0x5906370b9831728ec523b647137a1bbf0ab45390'
 const MAX_BETS = 1000n
 const USDC_UNIT = 1_000_000n
+// Even Steven's own Base builder code: on every transaction, never a referrer.
+export const ES_BUILDER_CODE = 'bc_ncytgilx'
 
 const factoryAbi = parseAbi(['function getAllMarkets() view returns (address[])'])
 const marketAbi = parseAbi([
@@ -59,7 +61,7 @@ export function computePoints(bets, records, { pointsPerUsdc, refPointsPerUsdc }
   // the bettor themselves (the app already drops self-referral; this is belt and braces).
   const seen = new Set()
   for (const rec of records) {
-    if (!rec?.refAddress) continue
+    if (!rec?.refAddress || rec.ref?.toLowerCase() === ES_BUILDER_CODE) continue
     const key = betKey(rec.marketAddress, rec.betId)
     const bet = onChain.get(key)
     if (!bet || seen.has(key) || BigInt(rec.stake) !== BigInt(bet.stake)) continue
