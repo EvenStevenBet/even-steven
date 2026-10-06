@@ -43,7 +43,7 @@ const OWNERS = [
  *   base-rpc.publicnode.com  refuses eth_getTransactionReceipt as an "archive
  *                            request" — the write lands, then the script dies
  *                            reading its own receipt and reports false failure
- *   mainnet.base.org         "over rate limit" mid-run; eth_getLogs capped at 2000
+ *   mainnet.base.org         "over rate limit" mid-run; eth_getLogs capped at 2000 (500 since Oct 2026)
  *   base.drpc.org            "Unknown block" on a pinned read moments after a
  *                            confirmed transaction
  *   1rpc.io/base             eth_getLogs capped at 50 blocks
