@@ -89,9 +89,24 @@ export function parseCsv(text) {
   for (const line of text.split('\n').slice(1)) {
     const cols = line.replace(/\r$/, '').split(',')
     const gameId = (cols[0] ?? '').trim()
-    if (gameId) rows.set(gameId, { gameDate: (cols[4] ?? '').trim(), status: (cols[5] ?? '').trim() })
+    if (gameId) rows.set(gameId, { gameDate: (cols[4] ?? '').trim(), status: (cols[5] ?? '').trim(), marketAddress: (cols[6] ?? '').trim() })
   }
   return rows
+}
+
+/**
+ * Pure. Rows the CSV still calls open that are not among the open markets on chain — candidates
+ * for a closed write-back that never landed. The caller confirms bettingOpen() == false first.
+ */
+export function staleOpenRows(csvRows, openAddresses) {
+  const open = new Set(openAddresses.map((a) => a.toLowerCase()))
+  const out = []
+  for (const [gameId, r] of csvRows) {
+    if (r.status === 'open' && /^0x[0-9a-fA-F]{40}$/.test(r.marketAddress) && !open.has(r.marketAddress.toLowerCase())) {
+      out.push({ gameId, marketAddress: r.marketAddress })
+    }
+  }
+  return out
 }
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }))
@@ -208,8 +223,35 @@ async function closeOne(chain, m, dryRun) {
     closedAt: new Date(Number(block.timestamp) * 1000).toISOString(),
     secondsBeforeKickoff: Math.round(m.gameDateMs / 1000 - Number(block.timestamp)),
   })
-  await markClosed(m.gameId).catch((err) => log('csv_update_failed', { gameId: m.gameId, error: err.message }))
+  await markClosedOrFlag(m.gameId)
   return true
+}
+
+// The close itself already landed, so a failed write-back must not stop the watcher; it fails
+// the job at the end instead so GitHub notifies, and the next run's reconcile retries it.
+async function markClosedOrFlag(gameId) {
+  try { await markClosed(gameId) } catch (err) {
+    log('csv_update_failed', { gameId, error: err.message })
+    console.log(`::error title=markets.csv not updated::${gameId} is closed on chain but its row still says open: ${err.message}`)
+    process.exitCode = 1
+  }
+}
+
+/** Marks closed every CSV row still saying open whose market is closed on chain. */
+async function reconcileCsv(chain, csvRows, openAddresses, dryRun) {
+  for (const r of staleOpenRows(csvRows, openAddresses)) {
+    let bettingOpen
+    try {
+      bettingOpen = await chain.pub.readContract({ address: r.marketAddress, abi: marketAbi, functionName: 'bettingOpen' })
+    } catch (err) {
+      log('csv_reconcile_read_failed', { gameId: r.gameId, market: r.marketAddress, error: err.shortMessage ?? err.message })
+      continue
+    }
+    if (bettingOpen) continue
+    if (dryRun) { log('would_mark_closed', { gameId: r.gameId, market: r.marketAddress }); continue }
+    log('csv_reconcile', { gameId: r.gameId, market: r.marketAddress })
+    await markClosedOrFlag(r.gameId)
+  }
 }
 
 function setOutput(key, value) {
@@ -237,8 +279,10 @@ async function main() {
   for (;;) {
     let next = null, timedRemaining = 0, untimedRemaining = 0, iterationFailed = false
     try {
-      if (Date.now() - csvReadAt > 5 * 60_000) { csvRows = parseCsv(await readCsvText()); csvReadAt = Date.now() }
+      let csvFresh = false
+      if (Date.now() - csvReadAt > 5 * 60_000) { csvRows = parseCsv(await readCsvText()); csvReadAt = Date.now(); csvFresh = true }
       const markets = await openOwnedMarkets(chain, csvRows)
+      if (csvFresh) await reconcileCsv(chain, csvRows, markets.map((m) => m.address), dryRun)
       const p = plan(markets, Date.now(), cfg.leadSeconds)
       for (const m of p.unknown) {
         if (warned.has(m.address)) continue

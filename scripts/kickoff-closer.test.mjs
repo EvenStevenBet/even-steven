@@ -1,7 +1,7 @@
 // node --test scripts/kickoff-closer.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { outcome, parseCsv, parseGameDate, plan, shouldHandOff } from './kickoff-closer.mjs'
+import { outcome, parseCsv, parseGameDate, plan, shouldHandOff, staleOpenRows } from './kickoff-closer.mjs'
 
 const T = Date.parse('2026-09-29T00:15:00Z') // MNF kickoff
 
@@ -48,7 +48,19 @@ test('parseCsv reads gameDate and status by gameId, tolerating CRLF and blank ro
     'NFL-2026-09-28-HOME-Bears-AWAY-Eagles,NFL,Bears,Eagles,2026-09-29T00:15:00Z,open,0x4F71,,2026-09-22T12:00:00Z,week 3,yes\r\n,,,,,,,,,,\n'
   const rows = parseCsv(csv)
   assert.equal(rows.size, 1)
-  assert.deepEqual(rows.get('NFL-2026-09-28-HOME-Bears-AWAY-Eagles'), { gameDate: '2026-09-29T00:15:00Z', status: 'open' })
+  assert.deepEqual(rows.get('NFL-2026-09-28-HOME-Bears-AWAY-Eagles'), { gameDate: '2026-09-29T00:15:00Z', status: 'open', marketAddress: '0x4F71' })
+})
+
+test('staleOpenRows: open rows whose market is no longer open on chain, nothing else', () => {
+  const A = '0xECdE7BCd697978b19880990964e8D9Eb09ACfb75'
+  const B = '0xF0F11bbce394Cf780a20f8A7F63490F50a175A26'
+  const rows = new Map([
+    ['closed-on-chain', { status: 'open', marketAddress: A }],
+    ['still-open', { status: 'open', marketAddress: B }],
+    ['already-closed-row', { status: 'closed', marketAddress: A }],
+    ['no-address', { status: 'open', marketAddress: '' }],
+  ])
+  assert.deepEqual(staleOpenRows(rows, [B.toLowerCase()]), [{ gameId: 'closed-on-chain', marketAddress: A }])
 })
 
 test('outcome: an untimed market fails the job, but never at the expense of a timed one', () => {
