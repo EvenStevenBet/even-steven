@@ -34,12 +34,40 @@ function apiHeaders(): Record<string, string> {
 }
 
 /**
+ * GET with retries on GitHub 5xx/429 and network errors. A 503 from GitHub on
+ * 2026-10-03 failed a whole run; the read is idempotent, so it is safe to repeat.
+ * PUTs are not retried here: a 5xx PUT may have landed.
+ */
+export async function getWithRetry(
+  url: string,
+  init: RequestInit,
+  delaysMs: number[] = [2_000, 4_000, 8_000],
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response | undefined;
+    let error: unknown;
+    try {
+      res = await fetchImpl(url, init);
+    } catch (err) {
+      error = err;
+    }
+    const retryable = res === undefined || res.status >= 500 || res.status === 429;
+    if (!retryable || attempt >= delaysMs.length) {
+      if (res) return res;
+      throw error;
+    }
+    await new Promise((r) => setTimeout(r, delaysMs[attempt]));
+  }
+}
+
+/**
  * Reads the CSV straight off GitHub every call rather than caching — the file
  * is small (hundreds of rows) and this keeps readRows/writeMarketResult each
  * working off the true current SHA instead of a copy that can go stale.
  */
 async function fetchCsvFile(): Promise<{ lines: string[]; sha: string }> {
-  const res = await fetch(contentsUrl(), { headers: apiHeaders() });
+  const res = await getWithRetry(contentsUrl(), { headers: apiHeaders() });
   if (!res.ok) {
     throw new Error(
       `GitHub contents GET failed for ${config.githubCsvPath}: ${res.status} ${res.statusText} — ${await res.text()}`
