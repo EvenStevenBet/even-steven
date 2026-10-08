@@ -117,6 +117,17 @@ async function untilState(label, read, want, tries = 40) {
 }
 
 /** Retry a read through a transient RPC hiccup. Never retries a write. */
+/** getLogs in <=500-block slices; public Base RPCs reject wider ranges. */
+async function getLogsChunked(address, fromBlock, toBlock, step = 499n) {
+  const out = []
+  for (let a = BigInt(fromBlock); a <= BigInt(toBlock); a += step + 1n) {
+    const b = a + step > BigInt(toBlock) ? BigInt(toBlock) : a + step
+    out.push(...await readRetry(() => pub.getLogs({ address, fromBlock: a, toBlock: b }),
+                                'getLogs ' + a + '-' + b))
+  }
+  return out
+}
+
 async function readRetry(fn, label, tries = 5) {
   let last
   for (let i = 0; i < tries; i++) {
@@ -452,7 +463,7 @@ async function phase2() {
   let ms
   if (alreadySettled) {
     console.log('  market already settled by a previous run — reading MarketSettled from logs')
-    const logs = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.oppBlock), toBlock: 'latest' })
+    const logs = await getLogsChunked(st.market, BigInt(st.oppBlock), await pub.getBlockNumber())
     ms = parseEventLogs({ abi: M, logs }).find(l => l.eventName === 'MarketSettled')
   } else {
     const exRc = await pub.waitForTransactionReceipt({ hash: await owner.writeContract({
@@ -597,7 +608,7 @@ async function verify() {
   chk('totalPool rose by stake only', dTot === STK, f(dTot))
 
   // --- settlement ---
-  const logs = await pub.getLogs({ address: st.market, fromBlock: BigInt(st.betBlock), toBlock: 'latest' })
+  const logs = await getLogsChunked(st.market, BigInt(st.betBlock), await pub.getBlockNumber())
   const ev = parseEventLogs({ abi: M, logs })
   const ms = ev.find(l => l.eventName === 'MarketSettled')
   chk('MarketSettled via UMA oracle', !!ms && ms.args.viaOracle === true,

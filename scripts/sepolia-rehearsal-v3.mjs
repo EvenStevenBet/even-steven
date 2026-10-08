@@ -117,11 +117,11 @@ async function untilState(label, read, want, tries = 40) {
 }
 
 /**
- * getLogs in <=1000-block slices. Base Sepolia's public RPC rejects wider ranges
- * ("eth_getLogs is limited to a 1,000 range"), and the span between the first bet
- * and the last claim grows with every minute of real UMA liveness.
+ * getLogs in <=500-block slices. Public Base RPCs cap the range (mainnet.base.org
+ * at 500 blocks since Oct 2026), and the span between the first bet and the last
+ * claim grows with every minute of real UMA liveness.
  */
-async function getLogsChunked(address, fromBlock, toBlock, step = 999n) {
+async function getLogsChunked(address, fromBlock, toBlock, step = 499n) {
   const out = []
   for (let a = BigInt(fromBlock); a <= BigInt(toBlock); a += step + 1n) {
     const b = a + step > BigInt(toBlock) ? BigInt(toBlock) : a + step
@@ -953,14 +953,14 @@ async function adopt() {
   const arts = compile(); const M = arts.SportsbookMarket.abi
   console.log('market  :', market)
 
-  // Public Sepolia RPCs refuse an unbounded getLogs range, so scan a window ending
+  // Public RPCs refuse a wide getLogs range, so scan a chunked window ending
   // at the head. ADOPT_FROM_BLOCK overrides; the default window comfortably covers a
   // rehearsal that is still inside its 7,200s liveness.
   const head = await readRetry(() => pub.getBlockNumber(), 'head')
   const fromBlock = process.env.ADOPT_FROM_BLOCK ? BigInt(process.env.ADOPT_FROM_BLOCK)
                                                  : (head > 5000n ? head - 5000n : 0n)
   console.log('scanning logs from block', fromBlock.toString(), 'to', head.toString())
-  const created = await readRetry(() => pub.getLogs({ address: market, fromBlock, toBlock: head }), 'market logs')
+  const created = await getLogsChunked(market, fromBlock, head)
   const ev = parseEventLogs({ abi: M, logs: created })
   const bets = ev.filter(l => l.eventName === 'BetPlaced').sort((a, b) => Number(a.args.betId - b.args.betId))
   console.log('bets found:', bets.length)
