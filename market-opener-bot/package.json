@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/runner.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/http.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
