@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { getWithRetry } from './http.js';
 
 export interface SheetRow {
   rowNumber: number; // 1-indexed; header is row 1, first data row is 2
@@ -39,7 +40,7 @@ function apiHeaders(): Record<string, string> {
  * working off the true current SHA instead of a copy that can go stale.
  */
 async function fetchCsvFile(): Promise<{ lines: string[]; sha: string }> {
-  const res = await fetch(contentsUrl(), { headers: apiHeaders() });
+  const res = await getWithRetry(contentsUrl(), { headers: apiHeaders() });
   if (!res.ok) {
     throw new Error(
       `GitHub contents GET failed for ${config.githubCsvPath}: ${res.status} ${res.statusText} — ${await res.text()}`
