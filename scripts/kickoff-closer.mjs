@@ -15,7 +15,8 @@
 //   CLOSE_LEAD_SECONDS     close this long before gameDate (default 60, so the tx is mined by kickoff)
 //   POLL_SECONDS           how often to re-read open markets (default 30)
 //   MAX_RUNTIME_SECONDS    hand off after this long (default 5h25m; the job limit is 6h)
-//   DRY_RUN=true           one read-only pass: print the plan, simulate due closes, send nothing
+//   DRY_RUN=true           one read-only pass: print the plan, simulate due closes, send nothing;
+//                          PRIVATE_KEY may be left unset (simulates as PRODUCTION_WALLET)
 //   GITHUB_TOKEN + GITHUB_REPOSITORY   read the CSV from, and write statuses back to, main
 //   MARKETS_CSV            local file or URL to read the CSV from instead (tests); disables write-back
 //   FORK_IMPERSONATE=true  tests only: sign as PRODUCTION_WALLET through a Hardhat fork's
@@ -166,10 +167,18 @@ export async function runPass(state, io, cfg) {
   const p = plan(markets, io.now(), cfg.leadSeconds)
 
   const closed = []
+  let closeFailed = false
   for (const m of p.due) {
     try { if (await io.closeOne(m)) closed.push(m) } catch (err) {
+      closeFailed = true
       io.log('close_failed', { gameId: m.gameId, market: m.address, error: err.shortMessage ?? err.message })
     }
+  }
+  // A close that failed is retried on the very next pass; no CSV work may stand in front of it.
+  // Rows for closes that did land are picked up by a later pass's reconcile.
+  if (closeFailed) {
+    io.log('csv_work_skipped', { reason: 'a due close failed this pass', closed: closed.map((m) => m.gameId) })
+    return { markets, plan: p, closedCount: closed.length, csvFailures: 0 }
   }
 
   let csvFailures = 0
@@ -217,17 +226,20 @@ const GH = () => ({
   url: `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/contents/data/markets.csv`,
   headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
 })
+// Every GitHub request goes through here: a hung GitHub call must not hang the watcher.
+const GITHUB_TIMEOUT_MS = 15_000
+const ghFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) })
 const canWriteBack = () => !process.env.MARKETS_CSV && Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPOSITORY)
 
 async function readCsvText() {
   const src = process.env.MARKETS_CSV
-  if (src) return /^https?:\/\//.test(src) ? (await fetch(src)).text() : fs.readFileSync(src, 'utf8')
+  if (src) return /^https?:\/\//.test(src) ? (await ghFetch(src)).text() : fs.readFileSync(src, 'utf8')
   if (canWriteBack()) {
-    const res = await fetch(`${GH().url}?ref=main`, { headers: GH().headers })
+    const res = await ghFetch(`${GH().url}?ref=main`, { headers: GH().headers })
     if (!res.ok) throw new Error(`GitHub contents GET ${res.status}`)
     return Buffer.from((await res.json()).content, 'base64').toString('utf8')
   }
-  const res = await fetch('https://raw.githubusercontent.com/EvenStevenBet/even-steven/main/data/markets.csv')
+  const res = await ghFetch('https://raw.githubusercontent.com/EvenStevenBet/even-steven/main/data/markets.csv')
   if (!res.ok) throw new Error(`markets.csv fetch ${res.status}`)
   return res.text()
 }
@@ -240,7 +252,7 @@ async function writeStatus(gameId, status) {
   if (!canWriteBack()) return log('csv_write_skipped', { gameId, status, reason: 'no GITHUB_TOKEN/GITHUB_REPOSITORY, or MARKETS_CSV override' })
   const retryable = (s) => s === 409 || s === 422 || s >= 500
   for (let attempt = 1; attempt <= 4; attempt++) {
-    const res = await fetch(`${GH().url}?ref=main`, { headers: GH().headers })
+    const res = await ghFetch(`${GH().url}?ref=main`, { headers: GH().headers })
     if (!res.ok) {
       if (retryable(res.status) && attempt < 4) { await sleep(2000 * attempt); continue }
       throw new Error(`GitHub contents GET ${res.status}`)
@@ -256,7 +268,7 @@ async function writeStatus(gameId, status) {
     cols[5] = status
     lines[i] = cols.join(',')
     const verb = status === 'closed' ? 'close betting for' : `set status ${status} on`
-    const put = await fetch(GH().url, {
+    const put = await ghFetch(GH().url, {
       method: 'PUT',
       headers: { ...GH().headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: `bot: ${verb} ${gameId}`, content: Buffer.from(lines.join('\n')).toString('base64'), sha: file.sha, branch: 'main' }),
@@ -280,6 +292,9 @@ async function setupChain() {
     const client = await pub.request({ method: 'web3_clientVersion' })
     if (!String(client).includes('HardhatNetwork')) throw new Error('FORK_IMPERSONATE is only allowed against a Hardhat fork')
     await pub.request({ method: 'hardhat_impersonateAccount', params: [owner] })
+    account = owner
+  } else if (process.env.DRY_RUN === 'true' && !(process.env.PRIVATE_KEY || '').trim()) {
+    // Keyless dry run: simulate as the owner's address. With no key loaded nothing can be signed.
     account = owner
   } else {
     const key = (process.env.PRIVATE_KEY || '').trim()

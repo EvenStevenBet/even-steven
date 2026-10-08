@@ -15,7 +15,8 @@ on:
         default: false
 
 concurrency:
-  group: kickoff-closer
+  # A dry run is read-only: it must never queue behind, or bump the queued successor of, a live watcher.
+  group: kickoff-closer${{ inputs.dry_run && '-dry' || '' }}
   cancel-in-progress: false  # never cancel a watcher that may be about to close a market
 
 permissions:
@@ -31,9 +32,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
+      # Nothing before the watch step may stop it: npm ci retries, and a unit-test failure is
+      # reported (red step, annotation) without keeping the watcher from closing markets.
+      - name: npm ci (3 tries)
         working-directory: scripts
-      - run: node --test scripts/kickoff-closer.test.mjs
+        run: for i in 1 2 3; do npm ci && exit 0; echo "npm ci attempt $i failed"; sleep 15; done; exit 1
+      - name: Unit tests
+        continue-on-error: true
+        run: node --test scripts/kickoff-closer.test.mjs
       - id: watch
         run: node scripts/kickoff-closer.mjs
         env:

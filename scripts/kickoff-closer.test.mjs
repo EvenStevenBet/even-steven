@@ -206,12 +206,60 @@ test('(b) CSV failures fail only the run that ends the watch, never one that han
   assert.equal(exitCodeFor({ rearm: 'true', sawUntimed: true, untimedOnly: false, csvFailures: 0 }), 1) // existing rule
 })
 
+const WORKFLOW = fs.readFileSync(new URL('../.github/workflows/kickoff-closer.yml', import.meta.url), 'utf8')
+const stepsBefore = (yml, marker) => yml.split(marker)[0].split('\n      - ').slice(1)
+
 test('(b) the handoff step runs even when the watch step fails', () => {
-  const yml = fs.readFileSync(new URL('../.github/workflows/kickoff-closer.yml', import.meta.url), 'utf8')
-  const step = yml.split('- name: Hand off to a fresh watcher')[1]
+  const step = WORKFLOW.split('- name: Hand off to a fresh watcher')[1]
   assert.ok(step, 'handoff step present')
   assert.match(step.split('\n').find((l) => l.trim().startsWith('if:')), /always\(\) && steps\.watch\.outputs\.rearm == 'true'/)
-  assert.match(yml, /- id: watch\n\s+run: node scripts\/kickoff-closer\.mjs/)
+  assert.match(WORKFLOW, /- id: watch\n\s+run: node scripts\/kickoff-closer\.mjs/)
+})
+
+test('(b) nothing before the watch step can stop it: tests continue on error, npm ci retries', () => {
+  const before = stepsBefore(WORKFLOW, '- id: watch')
+  const tests = before.find((s) => s.includes('kickoff-closer.test.mjs'))
+  assert.ok(tests && /continue-on-error: true/.test(tests), 'unit-test step has continue-on-error: true')
+  const install = before.find((s) => s.startsWith('name: npm ci'))
+  assert.match(install, /for i in 1 2 3; do npm ci && exit 0;.*done; exit 1/)
+  for (const s of before) {
+    if (s === install || s.startsWith('uses:')) continue
+    assert.match(s, /continue-on-error: true/, `step before watch can fail the job: ${s.split('\n')[0]}`)
+  }
+})
+
+test('(d) dry runs use their own concurrency group', () => {
+  assert.match(WORKFLOW, /concurrency:\n(\s+#.*\n)*\s+group: kickoff-closer\$\{\{ inputs\.dry_run && '-dry' \|\| '' \}\}\n/)
+})
+
+test('(a) every GitHub request in the closer carries a 15s timeout', () => {
+  const src = fs.readFileSync(new URL('./kickoff-closer.mjs', import.meta.url), 'utf8')
+  const rawFetches = src.split('\n').filter((l) => /(^|[^A-Za-z])fetch\(/.test(l))
+  assert.deepEqual(rawFetches.map((l) => l.trim()),
+    ['const ghFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) })'])
+  assert.match(src, /const GITHUB_TIMEOUT_MS = 15_000/)
+  assert.equal((src.match(/ghFetch\(/g) ?? []).length, 5, 'the five GitHub call sites')
+})
+
+test('(c) a failed due close skips every CSV write and the reconcile for that pass', async () => {
+  const csv = HEADER + row('g1', '2026-09-29T00:15:00Z', 'open', A) + row('g2', '2026-09-29T00:15:00Z', 'open', B) +
+    row('stale', '2026-09-20T00:15:00Z', 'open', C)
+  const f = fakeIo({ nowMs: T - 30_000, csv,
+    open: [{ address: A, gameId: 'g1', gameDateMs: T }, { address: B, gameId: 'g2', gameDateMs: T }],
+    states: { [C]: { bettingOpen: false, settled: true, canceled: false } } })
+  f.io.closeOne = async (m) => {
+    f.events.push(`close ${m.gameId}`)
+    if (m.gameId === 'g1') throw new Error('nonce too low')
+    return true
+  }
+  let reads = 0
+  f.io.marketState = async () => { reads++; return { bettingOpen: false, settled: true, canceled: false } }
+  const r = await runPass({ csvRows: new Map(), csvReadAt: 0 }, f.io, { ...cfg, reconcileQuietMs: 0 })
+  assert.deepEqual(f.events.filter((e) => e.startsWith('close')), ['close g1', 'close g2'], 'g2 still closes')
+  assert.equal(f.events.filter((e) => e.startsWith('write')).length, 0)
+  assert.equal(reads, 0, 'no reconcile reads')
+  assert.ok(f.events.includes('log csv_work_skipped'))
+  assert.equal(r.closedCount, 1)
 })
 
 test('outcome: an untimed market fails the job, but never at the expense of a timed one', () => {
