@@ -28,7 +28,9 @@ const [currentPayout, liquidPayout, impliedVig] = await market.getMarketEV(stake
 await usdc.approve(marketAddress, ethers.MaxUint256);
 await market.placeBet(greaterThan, stake);
 
-// 4. Claim after settlement
+// 4. Claim after settlement. Claiming is gasless through POST /api/claim or the claim
+//    button, and depends on the relay being up. If the relay is down, claim directly
+//    with a little ETH:
 await market.claimAllPayouts();
 ```
 
@@ -42,7 +44,8 @@ market data over plain HTTP at `evensteven.bet`, monetized per-request via the
 pay per call in USDC on Base.
 
 **These endpoints are read/quote only.** Placing a bet over HTTP is a separate, free endpoint —
-see **Placing a bet via the relay (POST /api/bet)** below.
+see **Placing a bet via the relay (POST /api/bet)** below. Claiming is too — see
+**Claiming via the relay (POST /api/claim)** below.
 
 ### Payment flow
 
@@ -124,7 +127,8 @@ the note under **Pre-Bet Evaluation**.
   "relay": {
     "note": "Place bets via POST /api/bet — see AGENTS.md for the full relay guide.",
     "quoteEndpoint": "GET /api/bet/quote",
-    "statusEndpoint": "GET /api/bet/status"
+    "statusEndpoint": "GET /api/bet/status",
+    "claimEndpoint": "POST /api/claim"
   },
   "timestamp": 1757262000000
 }
@@ -1067,6 +1071,8 @@ market.executeSettlement();
 ---
 
 ## Claiming Payouts
+
+Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 ```solidity
 // Claim all your bets in one transaction (preferred)
