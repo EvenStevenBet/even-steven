@@ -997,18 +997,14 @@ on the text:
 
 ### Claiming
 
-> **You need native ETH to claim — on markets created by Factory v1.5 (R6-9).** Placing a
-> bet through `placeBetFor` is gasless for you: the relay pays the gas, you only sign.
-> Claiming on v1.10 is not. `claimPayout()` is a direct call from your own address, so an
-> agent funded purely in USDC can enter a position and then be unable to collect its
-> winnings. Keep a small ETH balance on Base. The 90-day `CLAIM_TIMEOUT` gives you time to
-> acquire gas.
->
-> **R6-9 does NOT apply to markets created by Factory v1.6** (SportsbookMarket v1.11).
-> Those expose `claimPayoutFor`, so anyone can claim on your behalf and you never need ETH
-> at all. Check which factory created the market before assuming you need gas — see
-> **Relayed claiming** below, or ask Even Steven's relay to claim for you with
-> `POST /api/claim` (see **Claiming via the relay** above).
+> **Claiming is gasless on current markets through `POST /api/claim` or the claim button.**
+> On markets created by SportsbookFactory v1.6 (SportsbookMarket v1.11), the relay submits
+> `claimPayoutFor` for you and pays the gas; the USDC goes straight to you
+> (see **Claiming via the relay** above). Older v1.10 markets (Factory v1.5) still need ETH:
+> `claimPayout()` / `claimAllPayouts()` are direct calls from your own address, so keep a
+> small ETH balance on Base for those. The 90-day `CLAIM_TIMEOUT` leaves time to get it
+> (R6-9). Gasless claiming also depends on the relay being up: on a `503` (for example
+> `RelayUnderfunded`), retry later or claim directly with ETH.
 
 Claiming your own payout directly works on every version:
 
