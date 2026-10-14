@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-10-07T21:12:59.476Z",
+  "updatedAt": "2026-10-14T18:30:05.888Z",
   "pointsPerUsdc": 100,
   "refPointsPerUsdc": 50,
   "factory": "0x5906370b9831728ec523b647137a1bbf0ab45390",
-  "markets": 5,
-  "bets": 13,
+  "markets": 6,
+  "bets": 14,
   "addresses": [
     {
       "address": "0x1164a458a716289c3d724fd1b3a8f5072593271e",
-      "total": 10900,
-      "betPoints": 10900,
+      "total": 11000,
+      "betPoints": 11000,
       "referralPoints": 0
     },
     {
