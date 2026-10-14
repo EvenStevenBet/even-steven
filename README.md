@@ -81,7 +81,7 @@ Each game gets its own market contract. To bet on a game:
 3. Call `placeBet(greaterThan, stake)` — your USDC goes into the pool, and a flat 2% fee on your stake is collected at the same time
 4. After the game, anyone can submit the result to UMA via `requestSettlement(finalSpread)`
 5. After a 2-hour UMA liveness window, call `executeSettlement()` to finalize
-6. Winners claim their share: gaslessly through `POST /api/claim` or the claim button on current markets, or by calling `claimAllPayouts()` themselves (which needs ETH, and is required on older v1.10 markets)
+6. Winners claim their share. Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 **The payout logic:** Winners split the entire pool of stakes proportionally to their stake. The protocol seed (2 USDC total, added at market open) is set aside from that split and returned to the protocol at settlement — it is never a competing claim on the pool, so it does not dilute what winners receive. At a balanced pool this is exact: a $100 stake returns exactly $200 gross, not an approximation that a thin pool merely approaches. The fee was already taken at placement, so there is no settlement haircut. There is no house taking the other side. Losers' stakes go to winners. Zero-sum between bettors.
 
@@ -210,7 +210,7 @@ market.placeBet(greaterThan, stake); // minimum 1 USDC = 1e6
 
 ### Claiming payouts
 
-Claiming is gasless on current markets through POST /api/claim or the claim button. Older v1.10 markets still need ETH, and it depends on the relay being up.
+Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 ```solidity
 // After MarketSettled event fires:
