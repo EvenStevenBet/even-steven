@@ -527,8 +527,9 @@ A real `422`, from the example request above sent by a wallet with no USDC:
 ### Claiming via the relay (POST /api/claim)
 
 `POST https://evensteven.bet/api/claim` collects everything a bettor is owed on one market,
-gaslessly. The relay finds the bettor's claimable bets and submits one
-`claimPayoutFor(bettor, betIds)` (see **Relayed claiming** below), paying the ETH gas. The
+gaslessly. The relay finds the bettor's claimable bets and submits
+`claimPayoutFor(bettor, betIds)` (see **Relayed claiming** below) in chunks of 25 bets,
+one transaction after another, paying the ETH gas. The
 market sends the USDC straight to `bettor`; the relay never touches it.
 
 - **Free.** No x402 fee, no `X-PAYMENT` header, and nothing to sign: `claimPayoutFor` can
@@ -540,6 +541,8 @@ market sends the USDC straight to `bettor`; the relay never touches it.
   winning bets after settlement, every bet in refund mode. Each unclaimed id is simulated on
   its own first, so losing, already-claimed and not-yet-claimable ids are left out rather
   than reverting the batch.
+- **How much per request:** at most 8 transactions (200 bets). Anything left over is reported
+  as `remainingCount`; call again until it is `0`. A market holds at most 1000 bets.
 
 Request:
 
@@ -547,8 +550,10 @@ Request:
 { "marketAddress": "0x...", "bettor": "0x..." }
 ```
 
-Success (`200`) — the route answers after the transaction is mined and its receipt checked.
-Integers are decimal strings; `amount` is USDC base units (6 decimals):
+Success (`200`) — the route answers after every transaction is mined and its receipt checked.
+Integers are decimal strings except the two counts; `amount` is the total paid, in USDC base
+units (6 decimals). `txHashes` has one hash per mined transaction in order, and `txHash` is
+the last of them:
 
 ```json
 {
@@ -557,26 +562,52 @@ Integers are decimal strings; `amount` is USDC base units (6 decimals):
   "marketAddress": "0x...",
   "betIds": ["0", "1"],
   "amount": "33000000",
+  "txHashes": ["0x..."],
   "txHash": "0x...",
+  "claimedCount": 2,
+  "remainingCount": 0,
   "relay": "0x8a3eee4f6aD1c03Dc3d898ecD61283560Bd42fed"
 }
 ```
+
+**Partial success.** If a transaction after the first fails, the earlier ones stand and the
+route still answers `200` with what they claimed, plus an `incomplete` object holding the
+failure's `error`, `message` and any extra fields from the table below (for example `txHash`
+for `SubmissionPending`). Handle `incomplete.error` as you would that error, and the bets it
+did not claim are in `remainingCount`:
+
+```json
+{
+  "success": true,
+  "claimedCount": 25,
+  "remainingCount": 40,
+  "txHashes": ["0x..."],
+  "incomplete": { "error": "RelayUnderfunded", "message": "relay wallet is below its ETH gas threshold; try again later" }
+}
+```
+
+A request also stops early, with no `incomplete`, when another transaction would not finish
+inside its time budget; just call again.
 
 Nothing to claim (`200`, no transaction sent) — the bettor lost, already claimed, has no bets
 here, the market is not settled or canceled yet, or the 90-day claim window has closed:
 
 ```json
-{ "claimed": [], "note": "Nothing claimable" }
+{ "claimed": [], "note": "Nothing claimable", "txHashes": [], "claimedCount": 0, "remainingCount": 0 }
 ```
 
-Before answering `200 success` the route checks the receipt: exactly one `BetClaimed` per
+Before answering `200 success` the route checks each receipt: exactly one `BetClaimed` per
 claimed id with your address as bettor, one `PayoutClaimed` to you whose amount equals the
 sum of those payouts, a USDC transfer of that amount from the market to you, and no USDC to
 or from the relay.
 
-**Limits.** 10 requests per minute per IP. A submitted claim holds a 5-minute lock on
+**Limits.** 10 requests per minute per IP. A submitted claim holds a 60-second lock on
 `marketAddress` + `bettor`: a repeat request in that window either finds nothing left to
-claim or gets `409 ClaimInFlight`, and never sends a second transaction.
+claim or gets `409 ClaimInFlight`, and never sends a second transaction. The lock is held
+for the whole request and released when it ends with nothing in flight — including when the
+last transaction was mined and reverted. It is kept for the 60 seconds only after
+`SubmissionPending`, `SubmissionFailed` or `CustodyInvariantViolated`. There are no strikes:
+a failed claim never counts against you.
 
 | Status | `error` | Meaning | What to do |
 |---|---|---|---|
@@ -585,16 +616,17 @@ claim or gets `409 ClaimInFlight`, and never sends a second transaction.
 | 400 | `InvalidBettor` | `bettor` is the zero address. | Fix the request. |
 | 404 | `MarketNotFound` | No contract at `marketAddress`. | Fix the address. |
 | 409 | `UnsupportedMarket` | Not a SportsbookFactory v1.6 market. `factory` is included. | Claim directly with `claimPayout` / `claimAllPayouts`. |
-| 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 5 minutes. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
+| 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 60 seconds. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
 | 409 | contract error name | The market rejected the batch between the per-bet check and submission — for example `AlreadyClaimed` when someone else claimed first. Nothing was submitted. | Retry once; a `Nothing claimable` answer means the money already reached you. |
+| 409 | `RelayBusy` | The relay's transaction slot was taken by a concurrent bet twice in a row. `retryAfterSeconds` is included. Nothing was submitted, and the lock is released. | Retry after `retryAfterSeconds`. |
 | 503 | `LockServiceUnavailable` | The relay's lock service is unreachable, so it refuses to submit. Nothing was submitted. | Retry later. |
 | 502 | `RpcError` | The server could not read or simulate against the chain. | Retry after a few seconds. |
 | 503 | `RelayNotConfigured` | Server misconfiguration. Nothing was submitted. | Retry later, or claim directly. |
 | 503 | `RelayUnderfunded` | The relay's ETH is below its safety threshold. Nothing was submitted. | Retry later, or claim directly. |
-| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 5-minute lock. |
-| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 5-minute lock. |
-| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved. | Retry after the 5-minute lock. |
-| 500 | `CustodyInvariantViolated` | The receipt did not match the requested claim. Should never happen. `txHash` is included. | Stop and report the `txHash`. |
+| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 60-second lock. |
+| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 60-second lock. |
+| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved, and the lock is released. | Retry now. |
+| 500 | `CustodyInvariantViolated` | A receipt did not match the requested claim. Should never happen. `txHash` is the bad one; `txHashes` and `claimedCount` cover any earlier transactions. Always a 500, even after earlier transactions succeeded. | Stop and report the `txHash`. |
 | 500 | `InternalError` | Unexpected server error. | Check your balance, then retry. |
 
 ---
