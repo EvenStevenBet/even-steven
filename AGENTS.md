@@ -574,9 +574,10 @@ claimed id with your address as bettor, one `PayoutClaimed` to you whose amount 
 sum of those payouts, a USDC transfer of that amount from the market to you, and no USDC to
 or from the relay.
 
-**Limits.** 10 requests per minute per IP. A submitted claim holds a 5-minute lock on
+**Limits.** 10 requests per minute per IP. A submitted claim holds a 60-second lock on
 `marketAddress` + `bettor`: a repeat request in that window either finds nothing left to
-claim or gets `409 ClaimInFlight`, and never sends a second transaction.
+claim or gets `409 ClaimInFlight`, and never sends a second transaction. The lock is
+released at once if the claim is mined and reverts.
 
 | Status | `error` | Meaning | What to do |
 |---|---|---|---|
@@ -585,15 +586,15 @@ claim or gets `409 ClaimInFlight`, and never sends a second transaction.
 | 400 | `InvalidBettor` | `bettor` is the zero address. | Fix the request. |
 | 404 | `MarketNotFound` | No contract at `marketAddress`. | Fix the address. |
 | 409 | `UnsupportedMarket` | Not a SportsbookFactory v1.6 market. `factory` is included. | Claim directly with `claimPayout` / `claimAllPayouts`. |
-| 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 5 minutes. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
+| 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 60 seconds. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
 | 409 | contract error name | The market rejected the batch between the per-bet check and submission — for example `AlreadyClaimed` when someone else claimed first. Nothing was submitted. | Retry once; a `Nothing claimable` answer means the money already reached you. |
 | 503 | `LockServiceUnavailable` | The relay's lock service is unreachable, so it refuses to submit. Nothing was submitted. | Retry later. |
 | 502 | `RpcError` | The server could not read or simulate against the chain. | Retry after a few seconds. |
 | 503 | `RelayNotConfigured` | Server misconfiguration. Nothing was submitted. | Retry later, or claim directly. |
 | 503 | `RelayUnderfunded` | The relay's ETH is below its safety threshold. Nothing was submitted. | Retry later, or claim directly. |
-| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 5-minute lock. |
-| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 5-minute lock. |
-| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved. | Retry after the 5-minute lock. |
+| 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 60-second lock. |
+| 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 60-second lock. |
+| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved, and the lock is released. | Retry now. |
 | 500 | `CustodyInvariantViolated` | The receipt did not match the requested claim. Should never happen. `txHash` is included. | Stop and report the `txHash`. |
 | 500 | `InternalError` | Unexpected server error. | Check your balance, then retry. |
 
