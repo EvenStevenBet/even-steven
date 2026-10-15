@@ -1,0 +1,34 @@
+name: Wallet balance
+# Hourly read-only ETH balance check of the relay and the owner wallet. A wallet
+# below its threshold fails the job, and GitHub emails the repo owner. No keys,
+# no transactions. Thresholds: repository variables RELAY_MIN_BALANCE_ETH and
+# OWNER_MIN_BALANCE_ETH, else the defaults below.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: wallet-balance
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: scripts
+      - run: node --test scripts/wallet-balance-check.test.mjs
+      - run: node scripts/wallet-balance-check.mjs
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          RELAY_MIN_BALANCE_ETH: ${{ vars.RELAY_MIN_BALANCE_ETH || '0.0021' }}
+          OWNER_MIN_BALANCE_ETH: ${{ vars.OWNER_MIN_BALANCE_ETH || '0.0003' }}
