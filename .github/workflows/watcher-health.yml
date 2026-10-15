@@ -1,0 +1,59 @@
+name: Watcher health check
+# Fails loudly if any open market has kickoff within 12 hours and no kickoff-closer
+# run is active or queued. Catches the gap between a market being opened and its watcher
+# starting — or a watcher that crashed and was never re-armed.
+#
+# Runs on the same schedule as the market opener so every opener run is followed by a
+# health check. Also available as a manual trigger for spot-checks.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print findings without failing the job (useful for debugging)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: watcher-health
+  cancel-in-progress: true  # only the latest check matters
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm ci (scripts)
+        working-directory: scripts
+        run: for i in 1 2 3; do npm ci && exit 0; echo "npm ci attempt $i failed"; sleep 15; done; exit 1
+      - name: Check watcher coverage
+        id: health
+        run: |
+          node -e "
+            import('./scripts/watcher-health.mjs').then(({ runHealthCheck }) =>
+              runHealthCheck({
+                rpcUrl: process.env.RPC_URL,
+                factoryAddress: process.env.FACTORY_ADDRESS,
+                productionWallet: process.env.PRODUCTION_WALLET,
+                githubToken: process.env.GITHUB_TOKEN,
+                githubRepo: process.env.GITHUB_REPOSITORY,
+                marketsUrl: \`https://raw.githubusercontent.com/\${process.env.GITHUB_REPOSITORY}/main/data/markets.csv\`,
+                windowHours: 12,
+                dryRun: process.env.DRY_RUN === 'true',
+              })
+            ).catch(err => { console.error(JSON.stringify({ ts: new Date().toISOString(), event: 'health_check_fatal', error: err.message })); process.exit(1) })
+          "
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
+          PRODUCTION_WALLET: ${{ secrets.PRODUCTION_WALLET }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
