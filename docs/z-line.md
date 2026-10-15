@@ -6,9 +6,9 @@ The Z line is Even Steven's dynamic pricing mechanism — and the reason the pro
 
 The Z line moves based on betting activity to balance the pools. When pools are balanced, every bettor on the winning side earns nearly 1:1 on their stake — the near-even payout that Even Steven is named for.
 
-The Z line is the liquidity incentive mechanism. When a market opens, the Z line creates favorable odds on the minority side. Early bettors who take minority positions lock favorable Z before the market fills. As opposing money flows in, the Z line rebalances toward equilibrium. By the time the market is mature, pools are balanced and every bettor gets the steady-state even payout.
+The Z line is the liquidity incentive mechanism. When a market opens, the Z line creates favorable odds on the minority side. A bet on the lighter side locks the line as it stands when that bet lands. Each later bet moves the line again, toward the side with less money. When the pools are balanced — equal money on both sides — a winning stake returns 2×; the next bet can move them apart again.
 
-Imbalance is the transient early phase. Balance is the steady state.
+Balance means equal money on both sides. It is momentary: every bet moves the pools and the line.
 
 ## What Z represents
 
