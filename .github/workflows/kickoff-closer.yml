@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   watch:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v7
@@ -51,8 +51,19 @@ jobs:
           CLOSE_LEAD_SECONDS: ${{ vars.CLOSE_LEAD_SECONDS || '60' }}
           DRY_RUN: ${{ (inputs.dry_run && 'true') || vars.KICKOFF_CLOSER_DRY_RUN || 'false' }}
       - name: Hand off to a fresh watcher
-        # always(): a watcher that fails (an untimed market) still hands off if it was watching others
+        # always(): a watcher that fails (an untimed market) still hands off if it was watching others.
+        # dispatchWorkflow() retries 3 times with back-off; a 422 (already queued) counts as success.
         if: always() && steps.watch.outputs.rearm == 'true'
-        run: gh workflow run kickoff-closer.yml --ref "$GITHUB_REF_NAME"
+        run: |
+          node -e "
+            import('./kickoff-closer.mjs').then(({ dispatchWorkflow }) =>
+              dispatchWorkflow(
+                process.env.GITHUB_REF_NAME,
+                process.env.GITHUB_TOKEN,
+                process.env.GITHUB_REPOSITORY
+              )
+            ).catch(err => { console.error('dispatch failed:', err.message); process.exit(1) })
+          "
+        working-directory: scripts
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}

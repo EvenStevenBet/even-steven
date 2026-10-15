@@ -221,6 +221,39 @@ const int = (name, fallback) => {
   return Number(raw)
 }
 
+/**
+ * Dispatches the kickoff-closer workflow (watcher hand-off / successor).
+ * Retries up to 3 attempts on 5xx and network errors, with exponential back-off.
+ * A 422 (already queued) is treated as success — the watcher is covered.
+ * Exported for unit tests; production callers use `dispatchSuccessor()`.
+ */
+export async function dispatchWorkflow(ref, token, repo, delaysMs = [2000, 4000, 8000], fetchFn = fetch) {
+  const url = `https://api.github.com/repos/${repo}/actions/workflows/kickoff-closer.yml/dispatches`
+  const init = {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref }),
+  }
+  for (let attempt = 0; ; attempt++) {
+    let res, fetchErr
+    try { res = await fetchFn(url, init) } catch (err) { fetchErr = err }
+    if (res?.status === 204 || res?.status === 422) return // 422 = already running/queued — covered
+    const retryable = !res || res.status >= 500 || res.status === 429
+    if (!retryable || attempt >= delaysMs.length) {
+      const detail = res ? `${res.status} ${res.statusText}` : String(fetchErr)
+      throw new Error(`workflow dispatch failed: ${detail}`)
+    }
+    const delay = delaysMs[attempt]
+    log('watcher_dispatch_retrying', { attempt: attempt + 1, maxAttempts: delaysMs.length + 1, status: res?.status ?? 'network_error', delayMs: delay })
+    await sleep(delay)
+  }
+}
+
 // ── CSV source and write-back ─────────────────────────────────────────────────
 const GH = () => ({
   url: `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/contents/data/markets.csv`,
@@ -359,6 +392,21 @@ async function marketState({ pub }, address) {
 function setOutput(key, value) {
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
   log('output', { [key]: value })
+}
+
+/**
+ * Dispatches the successor watcher using the GitHub API with retry.
+ * Falls back gracefully if GITHUB_TOKEN or GITHUB_REPOSITORY are absent (local runs).
+ */
+async function dispatchSuccessor(ref) {
+  const token = process.env.GITHUB_TOKEN
+  const repo = process.env.GITHUB_REPOSITORY
+  if (!token || !repo) {
+    log('watcher_dispatch_skipped', { reason: 'no GITHUB_TOKEN or GITHUB_REPOSITORY (local run)' })
+    return
+  }
+  await dispatchWorkflow(ref, token, repo)
+  log('watcher_dispatched', { ref, repo })
 }
 
 async function main() {
