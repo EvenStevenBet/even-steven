@@ -4,8 +4,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   advances, chainStatus, exitCodeFor, outcome, parseCsv, parseGameDate, plan, reconcileCandidates, runPass,
-  shouldHandOff, shouldReconcile,
+  shouldHandOff, shouldReconcile, dispatchWorkflow,
 } from './kickoff-closer.mjs'
+import { atRiskMarkets } from './watcher-health.mjs'
 
 const T = Date.parse('2026-09-29T00:15:00Z') // MNF kickoff
 
@@ -267,4 +268,134 @@ test('outcome: an untimed market fails the job, but never at the expense of a ti
   assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 1, iterationFailed: false }), 'fail')
   assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 0, iterationFailed: false }), 'done')
   assert.equal(outcome({ timedRemaining: 0, untimedRemaining: 0, iterationFailed: true }), 'continue')
+})
+
+// ── dispatchWorkflow retry behaviour ─────────────────────────────────────────
+
+function makeFetch(responses) {
+  // responses: array of { status, statusText?, body? } or Error instances
+  let i = 0
+  return async () => {
+    const r = responses[i++]
+    if (r instanceof Error) throw r
+    const body = r.body ?? ''
+    return {
+      status: r.status,
+      statusText: r.statusText ?? '',
+      text: async () => body,
+    }
+  }
+}
+
+test('dispatchWorkflow resolves immediately on 204', async () => {
+  const fetch = makeFetch([{ status: 204 }])
+  await assert.doesNotReject(dispatchWorkflow('main', 'tok', 'owner/repo', [], fetch))
+})
+
+test('dispatchWorkflow treats 422 as success (already queued)', async () => {
+  const fetch = makeFetch([{ status: 422 }])
+  await assert.doesNotReject(dispatchWorkflow('main', 'tok', 'owner/repo', [], fetch))
+})
+
+test('dispatchWorkflow retries on 5xx and logs each attempt, then resolves on 204', async () => {
+  const logged = []
+  // Patch console.log temporarily to capture log output
+  const orig = console.log
+  console.log = (msg) => { try { logged.push(JSON.parse(msg)) } catch { /* not JSON */ } }
+  const fetch = makeFetch([{ status: 503 }, { status: 500 }, { status: 204 }])
+  try {
+    await dispatchWorkflow('main', 'tok', 'owner/repo', [0, 0], fetch)
+  } finally {
+    console.log = orig
+  }
+  const retries = logged.filter((l) => l.event === 'watcher_dispatch_retrying')
+  assert.equal(retries.length, 2, 'two retries logged')
+  assert.equal(retries[0].attempt, 1)
+  assert.equal(retries[1].attempt, 2)
+})
+
+test('dispatchWorkflow retries on network error, then resolves on 204', async () => {
+  const fetch = makeFetch([new Error('ECONNRESET'), { status: 204 }])
+  await assert.doesNotReject(dispatchWorkflow('main', 'tok', 'owner/repo', [0], fetch))
+})
+
+test('dispatchWorkflow throws without retry on 4xx (not 422)', async () => {
+  const fetch = makeFetch([{ status: 401, statusText: 'Unauthorized' }])
+  await assert.rejects(dispatchWorkflow('main', 'tok', 'owner/repo', [0, 0], fetch), /401/)
+})
+
+test('dispatchWorkflow throws after exhausting all retries', async () => {
+  const fetch = makeFetch([{ status: 503 }, { status: 503 }, { status: 503 }, { status: 503 }])
+  await assert.rejects(dispatchWorkflow('main', 'tok', 'owner/repo', [0, 0], fetch), /workflow dispatch failed/)
+})
+
+test('dispatchWorkflow retries on 429', async () => {
+  const fetch = makeFetch([{ status: 429 }, { status: 204 }])
+  await assert.doesNotReject(dispatchWorkflow('main', 'tok', 'owner/repo', [0], fetch))
+})
+
+// ── watcher-health: atRiskMarkets (pure) ─────────────────────────────────────
+
+const NOW_MS = Date.parse('2026-10-15T12:00:00Z')
+const WINDOW_H = 12
+
+test('atRiskMarkets: returns markets with kickoff within the window', () => {
+  const markets = [
+    { gameId: 'soon', gameDateMs: NOW_MS + 6 * 3600_000 },           // 6h from now — at risk
+    { gameId: 'borderline', gameDateMs: NOW_MS + 12 * 3600_000 },    // exactly 12h — at risk (≤)
+    { gameId: 'later', gameDateMs: NOW_MS + 13 * 3600_000 },         // 13h — safe
+    { gameId: 'past', gameDateMs: NOW_MS - 3600_000 },               // past kickoff — excluded
+    { gameId: 'untimed', gameDateMs: null },                          // no date — excluded
+  ]
+  const at = atRiskMarkets(markets, NOW_MS, WINDOW_H)
+  assert.deepEqual(at.map((m) => m.gameId), ['soon', 'borderline'])
+})
+
+test('atRiskMarkets: empty when no markets are within window', () => {
+  const markets = [{ gameId: 'later', gameDateMs: NOW_MS + 24 * 3600_000 }]
+  assert.deepEqual(atRiskMarkets(markets, NOW_MS, WINDOW_H), [])
+})
+
+test('atRiskMarkets: empty when input is empty', () => {
+  assert.deepEqual(atRiskMarkets([], NOW_MS, WINDOW_H), [])
+})
+
+// ── YAML structural assertions ────────────────────────────────────────────────
+
+const OPENER = fs.readFileSync(new URL('../.github/workflows/market-opener.yml', import.meta.url), 'utf8')
+const HEALTH = fs.readFileSync(new URL('../.github/workflows/watcher-health.yml', import.meta.url), 'utf8')
+
+test('(task 4) market-opener.yml has a dry_run workflow_dispatch input that defaults to true', () => {
+  assert.match(OPENER, /workflow_dispatch:/)
+  assert.match(OPENER, /dry_run:/)
+  assert.match(OPENER, /type: boolean/)
+  assert.match(OPENER, /default: true/)
+})
+
+test('(task 4) market-opener DRY_RUN env var honours the dispatch input, falling back to the secret', () => {
+  // The expression must prefer inputs.dry_run when set to true.
+  assert.match(OPENER, /inputs\.dry_run == true && 'true' \|\| secrets\.DRY_RUN/)
+})
+
+test('(task 3) watcher-health.yml exists and runs on the same cron as the opener', () => {
+  // Both run every 15 minutes.
+  assert.match(HEALTH, /cron: '\*\/15 \* \* \* \*'/)
+  assert.match(HEALTH, /workflow_dispatch:/)
+})
+
+test('(task 3) health check uses actions: read permission (no write needed)', () => {
+  assert.match(HEALTH, /actions: read/)
+  assert.ok(!HEALTH.includes('actions: write'), 'health check must not have write permission')
+})
+
+test('(task 3) health check job calls watcher-health.mjs runHealthCheck', () => {
+  assert.match(HEALTH, /watcher-health\.mjs/)
+  assert.match(HEALTH, /runHealthCheck/)
+})
+
+test('(b) hand-off step calls dispatchWorkflow from the mjs (no bare gh CLI)', () => {
+  const handoff = WORKFLOW.split('- name: Hand off to a fresh watcher')[1]
+  assert.ok(handoff, 'handoff step present')
+  assert.match(handoff, /dispatchWorkflow/)
+  assert.ok(!handoff.split('\n').some((l) => /^\s+run:.*gh workflow run/.test(l)), 'no bare gh CLI in hand-off')
 })

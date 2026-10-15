@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/runner.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/http.test.ts"
+    "test": "tsx --test src/http.test.ts src/dispatch.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
