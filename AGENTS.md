@@ -777,7 +777,7 @@ address[] memory unsettled = factory.getUnsettledMarkets();
 > uint256 correctedLiquidPayout  = stake * distributable / realLiquidSide;
 > ```
 
-**`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. Charged on your stake at placement; there is no settlement haircut, so 2% is the entire story. Compare directly against sportsbook vig (~450 bps at -110) or order-book platforms' stacked taker-fee + overround + slippage. Pool imbalance is a transient early-market condition that the Z line self-corrects — it is not a structural cost.
+**`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. Charged on your stake at placement; there is no settlement haircut, so 2% is the entire story. Compare directly against sportsbook vig (~450 bps at -110) or order-book platforms' stacked taker-fee + overround + slippage. Pool imbalance is not a protocol cost: it is the current split of money between the two sides, and it changes with every bet.
 
 ### Kelly criterion
 ```javascript
@@ -1234,7 +1234,7 @@ These are not loopholes. They are the protocol working as designed — early liq
 
 **1. Imbalance is an opportunity, not a risk.** When a market is lopsided — heavy flow on one side — the Z line has already moved to create favorable odds on the *minority* side. Taking the light side at that moment locks a favorable `lockedZ`, which means a wider band of final spreads pays you out than you would get at equilibrium. As opposing flow arrives and the pool rebalances, your locked position only improves relative to the crowd. The more volatile and imbalanced the market, the larger this early-mover edge.
 
-**2. Read the edge directly from `getMarketEV`.** If `currentPayout > liquidPayout`, the market is currently imbalanced in your favor — you are catching an early edge before the Z line balances. If they are equal, the market is at equilibrium and you are getting the steady-state even payout. Poll this, or subscribe to `ZUpdated`, to find markets where the current imbalance favors the side you would take on the merits anyway. Do not chase imbalance for its own sake — pair it with a real view on the outcome.
+**2. Read the edge directly from `getMarketEV`.** If `currentPayout > liquidPayout`, your side currently holds the smaller share of the money, so it would pay more than 2× if the pools stayed as they are — later bets can change that before betting closes. If they are equal, the pools are balanced right now (equal money on both sides), and 2× is the payout at that even split. Your bet locks the line when it lands; the payout is set by the pools when betting closes. Poll this, or subscribe to `ZUpdated`, to find markets where the current imbalance favors the side you would take on the merits anyway. Do not chase imbalance for its own sake — pair it with a real view on the outcome.
 
 **3. Earlier on the minority side means a wider winning range.** `lockedZ` is fixed at your bet time and never changes afterward. Locking a favorable Z early gives you a wider band of final spreads that win. See `z-line.md` for the worked example.
 

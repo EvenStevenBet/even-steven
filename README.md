@@ -16,7 +16,7 @@ Even Steven runs on Base. Every market is a standalone smart contract. Settlemen
 
 At liquidity, every winning bet returns approximately **$200 on a $100 stake** — regardless of which side you took. The Z line balances the pools so winners always split losers' stakes at even odds. You pay a flat 2% on your stake up front ($2 on a $100 bet), the pool pays out with no haircut, and you walk away with ~$98 profit. You put in $102, you get $200 back. Every bet, every market, every side.
 
-No other structure offers this. On an order book, your return depends on the price you bought at: favorites routinely pay 50–70% profit while underdogs pay 150–200%. Your payout is a function of when you entered and which side you took. On Even Steven, spread betting creates a naturally balanced proposition, and the Z line actively pushes pools toward equilibrium. Both sides converge to the same even return. At liquidity, it becomes Even Steven.
+No other structure offers this. On an order book, your return depends on the price you bought at: favorites routinely pay 50–70% profit while underdogs pay 150–200%. Your payout is a function of when you entered and which side you took. On Even Steven, the Z line moves with every bet to make the side with less money more attractive, which pulls the pools toward an even split. When the pools are balanced — equal money on both sides — a winner on either side gets the same 2× payout. That is Even Steven.
 
 ---
 
@@ -91,9 +91,9 @@ Each game gets its own market contract. To bet on a game:
 
 The Z line is Even Steven's dynamic pricing mechanism — and the reason the protocol can offer even payouts without a house.
 
-**When a market opens, the Z line creates favorable odds on the minority side.** Early bettors are rewarded for taking positions before the market fills. As more flow comes in, the Z line rebalances toward equilibrium. As the market reaches liquidity, pools balance and every bettor gets the even payout that Even Steven is named for.
+**When a market opens, the Z line creates favorable odds on the minority side.** A bet on the lighter side locks the line as it stands when that bet lands. Each later bet moves the line again, toward the side with less money. When the pools are balanced — equal money on both sides — the payout is the 2× that Even Steven is named for.
 
-This is not a flaw — it is the liquidity incentive mechanism. The Z line makes the protocol bootstrappable without market makers. Imbalance is the transient early phase that attracts liquidity. Balance is the steady state.
+This is not a flaw — it is the liquidity incentive mechanism. The Z line makes the protocol bootstrappable without market makers. Imbalance is what attracts the next bet. Balance — equal money on both sides — is momentary: each new bet moves it.
 
 **Z line formula:**
 
@@ -131,7 +131,7 @@ The fee is collected when you place the bet — it never enters the pool. Winner
 | `liquidPayout` | Gross pool payout at liquidity, when the Z line has balanced the pools — your steady-state return |
 | `impliedVig` | Protocol fee in basis points — the complete cost, nothing hidden |
 
-**`liquidPayout` is the number that matters for steady-state EV.** This is what Even Steven converges to as the market reaches liquidity. At balance, a $100 stake returns **exactly** $200 gross on a win — not an approximation — net of the $2 placement fee, exactly $98 profit — 2% friction, full stop. Use this for long-term positioning.
+**`liquidPayout` is the number that matters for steady-state EV.** It is the payout at an even split — equal money on both sides. At an even split, a $100 stake returns **exactly** $200 gross on a win — not an approximation — net of the $2 placement fee, exactly $98 profit — 2% friction, full stop. Use this for long-term positioning.
 
 > **Note on the deployed contract:** `getMarketEV`/`simulatePayout` as currently deployed compute
 > `liquidPayout`'s denominator from `simTotal / 2`, without excluding that side's share of
