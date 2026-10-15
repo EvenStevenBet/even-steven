@@ -591,7 +591,11 @@ did not claim are in `remainingCount`:
 ```
 
 A request also stops early, with no `incomplete`, when another transaction would not finish
-inside its time budget; just call again.
+inside its time budget; just call again. If the RPC is so slow that not even the first
+transaction fits, nothing is sent and the route answers `200` with `claimedCount: 0`,
+`remainingCount` set to the claimable count and `incomplete.error` = `TimeBudgetExceeded`; the
+lock is released, so call again. If `claimedCount` is `0` twice in a row, stop: retry later, or
+claim directly with `claimPayout` / `claimAllPayouts`, which needs a little ETH.
 
 Nothing to claim (`200`, no transaction sent) — the bettor lost, already claimed, has no bets
 here, the market is not settled or canceled yet, or the 90-day claim window has closed:
@@ -616,22 +620,23 @@ a failed claim never counts against you.
 | Status | `error` | Meaning | What to do |
 |---|---|---|---|
 | 429 | `RateLimited` | More than 10 requests in the current minute from your IP. `retryAfterSeconds` is included. | Retry after `retryAfterSeconds`. |
-| 400 | `InvalidRequest` | `marketAddress` or `bettor` is missing or not an address. `field` names it. | Fix the request. |
+| 400 | `InvalidRequest` | The body is empty or not a JSON object (`field: "body"`), or `marketAddress` or `bettor` is missing or not an address (`field` names it). | Fix the request. |
 | 400 | `InvalidBettor` | `bettor` is the zero address. | Fix the request. |
 | 404 | `MarketNotFound` | No contract at `marketAddress`. | Fix the address. |
 | 409 | `UnsupportedMarket` | Not a SportsbookFactory v1.6 market. `factory` is included. | Claim directly with `claimPayout` / `claimAllPayouts`. |
 | 409 | `ClaimInFlight` | A claim for this market + bettor was submitted in the last 60 seconds. `lockSeconds` is included. Nothing was submitted. | Check your USDC balance or `GET /api/bet/status` (`claimed`); retry after the lock if bets remain unclaimed. |
 | 409 | contract error name | The market rejected the batch between the per-bet check and submission — for example `AlreadyClaimed` when someone else claimed first. Nothing was submitted. | Retry once; a `Nothing claimable` answer means the money already reached you. |
 | 409 | `RelayBusy` | The relay's transaction slot was taken by a concurrent bet twice in a row. `retryAfterSeconds` is included. Nothing was submitted, and the lock is released. | Retry after `retryAfterSeconds`. |
-| 503 | `LockServiceUnavailable` | The relay's lock service is unreachable, so it refuses to submit. Nothing was submitted. | Retry later. |
+| 503 | `LockServiceUnavailable` | The relay's Redis store, which holds both the rate limit and the lock, is unreachable, so it refuses to submit. The rate limit is checked before anything else, so even a malformed request gets this 503 rather than a 400. Nothing was submitted. | Retry later. |
 | 502 | `RpcError` | The server could not read or simulate against the chain. | Retry after a few seconds. |
 | 503 | `RelayNotConfigured` | Server misconfiguration. Nothing was submitted. | Retry later, or claim directly. |
 | 503 | `RelayUnderfunded` | The relay's ETH is below its safety threshold. Nothing was submitted. | Retry later, or claim directly. |
 | 502 | `SubmissionFailed` | The transaction could not be sent. | Retry after the 60-second lock. |
 | 504 | `SubmissionPending` | Sent, but not mined within 15 seconds. `txHash` is included. | Check `txHash`. If it never lands, retry after the 60-second lock. |
-| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved, and the lock is released. | Retry now. |
+| 502 | `SubmissionReverted` | Mined but reverted. `txHash` is included. Nothing moved, and the lock is released. | Retry once. If it reverts again, claim directly with `claimPayout` / `claimAllPayouts`, which needs a little ETH. |
 | 500 | `CustodyInvariantViolated` | A receipt did not match the requested claim. Should never happen. `txHash` is the bad one; `txHashes` and `claimedCount` cover any earlier transactions. Always a 500, even after earlier transactions succeeded. | Stop and report the `txHash`. |
 | 500 | `InternalError` | Unexpected server error. | Check your balance, then retry. |
+| 504 | none (Vercel) | The request ran past the route's 120-second limit and the platform cut it off. The body is Vercel's own error page, not JSON, so there is no `error` code. Transactions already mined stand, and nothing can be paid twice or to anyone else. | Check your USDC balance or `GET /api/bet/status` (`claimed`), then call again after 60 seconds. |
 
 ---
 
