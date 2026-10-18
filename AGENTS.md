@@ -2,7 +2,7 @@
 
 This document covers everything needed to programmatically interact with Even Steven markets. No UI required.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no overround. One flat 2% fee on stake. Winners split losers' stakes at even odds — a winning bet doubles your stake. Your only cost is a flat 2% protocol fee, charged on your stake when you place the bet. That 2% is your total friction.
+Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no overround. One flat 2% fee on stake, paid upfront. Winners split losers' stakes; at liquidity (balanced pools), a winning bet doubles your stake.
 
 ## Why this matters for an agent
 
@@ -10,7 +10,7 @@ An agent's job is to make money. Even Steven helps it make more, structurally �
 
 Traditional spread betting is -110 on both sides: you lay $110 to win $100, and the $10 is the house's before the game even starts. A favorite might be -150 — lay $150 to win $100. Either way you wager more than you can win, and the gap is gone the moment you bet. Even Steven is true even money: $100 to win $100, minus a flat 2% fee. That is lower friction than every order-book venue (2% total versus ~4.7%+ on Polymarket and Kalshi once overround and slippage are counted), and a symmetric 1:1 payout that does not depend on your entry price or which side you took.
 
-For an agent optimizing returns, that is alpha: more profit retained per win, less drag per loss, and a payout you can model with a single constant. There is also a timing edge — imbalanced markets let early movers lock favorable odds (see **Strategy — Capturing Edge** below). The rest of this guide is how to capture all of it.
+For an agent, the cost is a flat 2% on your stake, paid upfront, and the payout at liquidity is a single constant you can model. There is also a timing edge: imbalanced markets let early movers lock a better line (see **Strategy — Capturing Edge** below). The rest of this guide is how to use both.
 
 ---
 
@@ -1305,4 +1305,4 @@ These are not loopholes. They are the protocol working as designed — early liq
 ---
 
 *Even Steven v1.11 (SportsbookFactory v1.6) — September 2026*
-*Audited by Claude: five rounds, March–June 2026 (round 5 covers the v1.8.1 taker-fee model), plus three delta audits — August 2026 (v1.9 UMA identifier fix), September 2026 (v1.10 `placeBetFor`, Factory v1.5) and September 2026 v3 (v1.11 `claimPayoutFor` and `placeBetForWithSignature`, Factory v1.6). All critical and high findings are resolved except R-4 (High: no refund path if the owner abandons a market with betting open), which was deliberately not shipped and remains an accepted risk. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
+*Five internal audit rounds by Claude, March–June 2026 (round 5 covers the v1.8.1 taker-fee model), plus three delta audits — August 2026 (v1.9 UMA identifier fix), September 2026 (v1.10 `placeBetFor`, Factory v1.5) and September 2026 v3 (v1.11 `claimPayoutFor` and `placeBetForWithSignature`, Factory v1.6). All critical and high findings are resolved except R-4 (High: no refund path if the owner abandons a market with betting open), which was deliberately not shipped and remains an accepted risk. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
