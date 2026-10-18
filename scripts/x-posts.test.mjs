@@ -1,7 +1,7 @@
 // node --test scripts/x-posts.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assertPostable, eligible, lineText, oauthHeader, parseGameId, pendingFor, postToX, render, resultText,
+import { assertPostable, byText, eligible, oauthHeader, parseGameId, pendingFor, postToX, render, resultText,
          runOnce, stageOf } from './x-posts.mjs'
 
 const GID = 'NFL-2026-10-18-HOME-Packers-AWAY-Cowboys'
@@ -15,9 +15,9 @@ test('parseGameId', () => {
 })
 
 test('line: home is quoted at -Z; away favourite when Z < 0; pick em at 0', () => {
-  assert.equal(lineText(35000n, 'Packers', 'Cowboys'), 'Packers -3.5')
-  assert.equal(lineText(-30000n, 'Packers', 'Cowboys'), 'Cowboys -3')
-  assert.equal(lineText(0n, 'Packers', 'Cowboys'), "pick'em")
+  assert.equal(byText(35000n, 'Packers', 'Cowboys'), 'Packers by 3.5')
+  assert.equal(byText(-30000n, 'Packers', 'Cowboys'), 'Cowboys by 3')
+  assert.equal(byText(0n, 'Packers', 'Cowboys'), "pick'em")
 })
 
 test('result wording follows finalSpread = home - away', () => {
@@ -26,15 +26,27 @@ test('result wording follows finalSpread = home - away', () => {
   assert.equal(resultText(0n, 'Packers', 'Cowboys'), 'Packers and Cowboys tied')
 })
 
-test('templates', () => {
-  assert.equal(render('opened', M),
-    'Market open: Cowboys at Packers (NFL, Oct 18).\nLine: Packers -3.5.\nWinners split the pool. Flat 2% on your stake, paid upfront.')
-  assert.equal(render('closed', M),
-    'Betting closed: Cowboys at Packers (NFL, Oct 18).\nClosing line: Packers by 4.5.')
-  assert.equal(render('closed', { ...M, currentZ: 0n }),
-    "Betting closed: Cowboys at Packers (NFL, Oct 18).\nClosing line: pick'em.")
-  assert.equal(render('settled', M),
-    'Final: Packers won by 7 (Cowboys at Packers, NFL, Oct 18).\nWinners can claim their payouts now.')
+test('templates are exactly the approved wording', () => {
+  assert.equal(render('opened', M), 'Cowboys at Packers is open. Line: Packers by 3.5. Every bet locks the line it gets.')
+  assert.equal(render('opened', { ...M, initialZ: 0n }), "Cowboys at Packers is open. Line: pick'em. Every bet locks the line it gets.")
+  assert.equal(render('closed', M), 'Betting is closed on Cowboys at Packers. Line closed at Packers by 4.5.')
+  assert.equal(render('closed', { ...M, currentZ: 0n }), "Betting is closed on Cowboys at Packers. Line closed at pick'em.")
+  assert.equal(render('settled', M), 'Final: Packers won by 7. Winners split the pool.')
+  assert.equal(render('settled', { ...M, finalSpread: -3n }), 'Final: Cowboys won by 3. Winners split the pool.')
+  assert.equal(render('settled', { ...M, finalSpread: 0n }), 'Final: Packers and Cowboys tied. Winners split the pool.')
+})
+
+test('no template mentions fees, claims, payouts, multiples or pool sizes', () => {
+  for (const e of ['opened', 'closed', 'settled']) {
+    assert.doesNotMatch(render(e, M), /fee|2%|claim|payout|\dx|\$|—|vig|profit|gasless/i)
+  }
+})
+
+test('a doubleheader posts different text for each game', () => {
+  const g1 = render('opened', { ...M, gameId: 'MLB-2026-06-01-HOME-Red-Sox-AWAY-Blue-Jays-G1' })
+  const g2 = render('opened', { ...M, gameId: 'MLB-2026-06-01-HOME-Red-Sox-AWAY-Blue-Jays-G2' })
+  assert.notEqual(g1, g2)
+  assert.match(g1, /^Blue Jays at Red Sox, game 1 is open\./)
 })
 
 test('templates reject unsafe team names and any link, mention or hashtag', () => {
@@ -67,6 +79,7 @@ test('pendingFor posts only the latest stage reached and once', () => {
 
 test('eligible respects notBefore', () => {
   assert.equal(eligible(GID, { notBefore: '2026-10-18' }), true)
+  assert.equal(eligible(GID, { notBefore: '2026-10-20' }), false)
   assert.equal(eligible(GID, { notBefore: '2026-10-19' }), false)
   assert.equal(eligible('garbage', { notBefore: '2026-01-01' }), false)
 })

@@ -30,7 +30,6 @@ export const EVENTS = ['opened', 'closed', 'settled']
 const RANK = { opened: 0, closed: 1, settled: 2 }
 const Z_SCALE = 10_000n
 const MAX_LEN = 280
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 // ── Pure: parsing and wording ────────────────────────────────────────────────
 
@@ -49,16 +48,7 @@ function floorLine(z) { // Z is 4-decimal fixed point; returns the line as a num
   return Math.round((Number(z) / Number(Z_SCALE)) * 10) / 10
 }
 
-/** "Packers -3.5", "Cowboys -1", or "pick'em". Home is quoted at -Z (Z > 0 means home lays points). */
-export function lineText(z, home, away) {
-  const n = floorLine(z)
-  if (n === 0) return "pick'em"
-  const team = n > 0 ? home : away
-  const by = Math.abs(n)
-  return `${team} -${Number.isInteger(by) ? by : by.toFixed(1)}`
-}
-
-/** "Packers by 3.5", or "pick'em". Same Z → favourite mapping as lineText. */
+/** "Packers by 3.5", or "pick'em". Home is quoted at -Z (Z > 0 means home lays points). */
 export function byText(z, home, away) {
   const n = floorLine(z)
   if (n === 0) return "pick'em"
@@ -80,19 +70,15 @@ export function render(event, m) {
   const g = parseGameId(m.gameId)
   if (!g) throw new Error(`gameId does not parse: ${m.gameId}`)
   if (!SAFE_NAME.test(g.home) || !SAFE_NAME.test(g.away)) throw new Error(`unsafe team name in ${m.gameId}`)
-  const where = `${g.away} at ${g.home}`
-  const when = `${g.sport}, ${MONTHS[g.month - 1]} ${g.day}${g.game ? `, game ${g.game}` : ''}`
+  // A doubleheader would otherwise post identical text twice, and X rejects a duplicate as an error.
+  const where = `${g.away} at ${g.home}${g.game ? `, game ${g.game}` : ''}`
   let text
   if (event === 'opened') {
-    text = [`Market open: ${where} (${when}).`,
-            `Line: ${lineText(m.initialZ, g.home, g.away)}.`,
-            'Winners split the pool. Flat 2% on your stake, paid upfront.'].join('\n')
+    text = `${where} is open. Line: ${byText(m.initialZ, g.home, g.away)}. Every bet locks the line it gets.`
   } else if (event === 'closed') {
-    text = [`Betting closed: ${where} (${when}).`,
-            `Closing line: ${byText(m.currentZ, g.home, g.away)}.`].join('\n')
+    text = `Betting is closed on ${where}. Line closed at ${byText(m.currentZ, g.home, g.away)}.`
   } else if (event === 'settled') {
-    text = [`Final: ${resultText(m.finalSpread, g.home, g.away)} (${where}, ${when}).`,
-            'Winners can claim their payouts now.'].join('\n')
+    text = `Final: ${resultText(m.finalSpread, g.home, g.away)}. Winners split the pool.`
   } else throw new Error(`unknown event ${event}`)
   assertPostable(text)
   return text
