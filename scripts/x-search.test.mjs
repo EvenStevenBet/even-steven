@@ -2,7 +2,7 @@
 import crypto from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { COLUMNS, collect, nextBatch, serviceAccountJwt, sheetName, toRows, xSearch } from './x-search.mjs'
+import { COLUMNS, collect, nextBatch, serviceAccountJwt, toRows, xSearch } from './x-search.mjs'
 
 const body = ids => ({
   data: ids.map(id => ({ id, author_id: 'u' + id, text: `=SUM(${id})`, created_at: '2026-10-17T00:00:00Z', public_metrics: { like_count: 3, retweet_count: 1 } })),
@@ -54,7 +54,6 @@ test('service account JWT verifies against its public key', () => {
   const jwt = serviceAccountJwt({ client_email: 'sa@x.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) }, 1000)
   const [h, c, s] = jwt.split('.')
   assert.ok(crypto.createVerify('RSA-SHA256').update(`${h}.${c}`).verify(publicKey, Buffer.from(s, 'base64url')))
-  assert.equal(JSON.parse(Buffer.from(c, 'base64url')).scope, 'https://www.googleapis.com/auth/drive')
+  assert.equal(JSON.parse(Buffer.from(c, 'base64url')).scope, 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly')
 })
 
-test('sheet name', () => assert.equal(sheetName('2026-10-18'), 'ES - X Search 2026-10-18'))

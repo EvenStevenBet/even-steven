@@ -22,7 +22,7 @@ const SEARCH_URL = 'https://api.x.com/2/tweets/search/recent'
 const FOLDER_MIME = 'application/vnd.google-apps.folder'
 const SHEET_MIME = 'application/vnd.google-apps.spreadsheet'
 
-export function sheetName(date) { return `ES - X Search ${date}` }
+export const SHEET_FILE_NAME = 'ES - X Search'
 
 /** Pure. X search response → rows, minus ids already seen (a post matching two queries is listed once). */
 export function toRows(query, body, seen = new Set()) {
@@ -88,7 +88,7 @@ const b64url = b => Buffer.from(b).toString('base64url')
 
 export function serviceAccountJwt(sa, nowSec = Math.floor(Date.now() / 1000)) {
   const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const claim = b64url(JSON.stringify({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/drive',
+  const claim = b64url(JSON.stringify({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly',
     aud: 'https://oauth2.googleapis.com/token', iat: nowSec, exp: nowSec + 3600 }))
   const sig = crypto.createSign('RSA-SHA256').update(`${head}.${claim}`).sign(sa.private_key)
   return `${head}.${claim}.${b64url(sig)}`
@@ -102,7 +102,6 @@ async function googleFetch(url, token, init = {}) {
     let reason = text.slice(0, 300)
     try { const e = JSON.parse(text).error; reason = `${e.status ?? ''} ${e.message ?? ''} ${(e.errors ?? []).map(x => x.reason).join(',')}`.trim() } catch { /* raw */ }
     const err = new Error(`Google ${res.status}: ${reason}`)
-    err.quota = /storageQuotaExceeded/.test(text)
     throw err
   }
   return text ? JSON.parse(text) : {}
@@ -119,25 +118,32 @@ async function accessToken(sa) {
 
 const q = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
-export async function writeSheet({ sa, folderName, name, rows }) {
+/**
+ * Adds one tab, named by date, to the existing spreadsheet SHEET_FILE_NAME inside the shared folder. The sheet is
+ * created by a person (so it counts against their Drive, not the service account's); this never creates a file.
+ * Re-running the same day clears and rewrites that day's tab.
+ */
+export async function writeTab({ sa, folderName, fileName, tab, rows }) {
   const token = await accessToken(sa)
-  const folders = (await googleFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-    `name='${q(folderName)}' and mimeType='${FOLDER_MIME}' and trashed=false`)}&fields=files(id,name)`, token)).files
+  const find = async query => (await googleFetch(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, token)).files
+  const folders = await find(`name='${q(folderName)}' and mimeType='${FOLDER_MIME}' and trashed=false`)
   if (folders.length === 0) throw new Error(`Drive folder "${folderName}" not found: share it with ${sa.client_email} as Editor`)
   if (folders.length > 1) throw new Error(`more than one Drive folder named "${folderName}" is shared with the service account`)
-  const folder = folders[0].id
+  const files = await find(`name='${q(fileName)}' and mimeType='${SHEET_MIME}' and '${folders[0].id}' in parents and trashed=false`)
+  if (files.length === 0) throw new Error(`spreadsheet "${fileName}" not found in "${folderName}": create it there first`)
+  if (files.length > 1) throw new Error(`more than one spreadsheet named "${fileName}" in "${folderName}"`)
+  const id = files[0].id
+  const base = `https://sheets.googleapis.com/v4/spreadsheets/${id}`
 
-  // Re-running the same day rewrites that day's sheet instead of making a second one.
-  const existing = (await googleFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
-    `name='${q(name)}' and mimeType='${SHEET_MIME}' and '${folder}' in parents and trashed=false`)}&fields=files(id)`, token)).files
-  let id = existing[0]?.id
-  if (!id) id = (await googleFetch('https://www.googleapis.com/drive/v3/files?fields=id', token,
-    { method: 'POST', body: JSON.stringify({ name, mimeType: SHEET_MIME, parents: [folder] }) })).id
-
-  const range = encodeURIComponent('A1')
-  await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/A:H:clear`, token, { method: 'POST', body: '{}' })
+  const meta = await googleFetch(`${base}?fields=sheets.properties.title`, token)
+  if (!meta.sheets.some(s => s.properties.title === tab)) {
+    await googleFetch(`${base}:batchUpdate`, token, { method: 'POST', body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }) })
+  }
+  const range = encodeURIComponent(`'${tab}'`)
+  await googleFetch(`${base}/values/${range}:clear`, token, { method: 'POST', body: '{}' })
   // RAW, never USER_ENTERED: post text beginning with "=" must stay text, not become a formula.
-  await googleFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}?valueInputOption=RAW`, token,
+  await googleFetch(`${base}/values/${encodeURIComponent(`'${tab}'!A1`)}?valueInputOption=RAW`, token,
     { method: 'PUT', body: JSON.stringify({ values: [COLUMNS, ...rows] }) })
   return id
 }
@@ -158,18 +164,13 @@ async function main() {
   console.log(JSON.stringify({ event: 'collected', posts: rows.length, cap, queries: cfg.queries.length, error: error?.message ?? null }))
 
   if (dryRun) {
-    console.log(`DRY RUN: would write "${sheetName(date)}" to "${cfg.driveFolderName}" with ${rows.length} rows`)
+    console.log(`DRY RUN: would write tab "${date}" of "${SHEET_FILE_NAME}" in "${cfg.driveFolderName}" with ${rows.length} rows`)
     for (const r of rows.slice(0, 10)) console.log(JSON.stringify(r))
   } else {
     if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set')
     const sa = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
-    try {
-      const id = await writeSheet({ sa, folderName: cfg.driveFolderName, name: sheetName(date), rows })
-      console.log(JSON.stringify({ event: 'written', sheet: sheetName(date), id, rows: rows.length }))
-    } catch (err) {
-      if (err.quota) console.error('Service accounts own no Drive storage. Move the folder to a Shared Drive or switch to an OAuth user token.')
-      throw err
-    }
+    const id = await writeTab({ sa, folderName: cfg.driveFolderName, fileName: SHEET_FILE_NAME, tab: date, rows })
+    console.log(JSON.stringify({ event: 'written', sheet: SHEET_FILE_NAME, tab: date, id, rows: rows.length }))
   }
   if (error) throw error // rows collected before the failure were still written
 }
