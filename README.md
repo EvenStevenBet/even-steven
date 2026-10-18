@@ -6,7 +6,7 @@ Crypto's core promise is removing the trusted third party. In betting, that thir
 
 **Kalshi and Polymarket didn't.** They moved on-chain and kept the house — they just renamed it. The *overround*, where both sides of the book sum past 100¢, is the house's cut. *Slippage*, where your order walks the book against you, is the house's cut. Their taker fees are the house's cut. It is the same margin a bookie always took, renamed and ported to an order book. They kept it because the house is profitable and they like the margin.
 
-**Even Steven removes it.** No house, no overround. It is parimutuel: winners split losers' stakes, and at liquidity (balanced pools) a winning bet doubles your stake. Your only cost is a flat 2% on your stake, paid upfront — known before you commit, immutable for the life of the market. Remove the house, and betting becomes even.
+**Even Steven removes it.** No house, no overround. It is parimutuel: winners split the losing side's stakes. Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Your only cost is a flat 2% of your bet, paid upfront, known before you commit and immutable for the life of the market. Remove the house, and betting becomes even.
 
 This is not a cheaper house. It is a different product. We do not just win on fees — we changed what a bet is.
 

@@ -2,7 +2,7 @@
 
 This document covers everything needed to programmatically interact with Even Steven markets. No UI required.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no overround. One flat 2% fee on stake, paid upfront. Winners split losers' stakes; at liquidity (balanced pools), a winning bet doubles your stake.
+Even Steven is a houseless parimutuel sports betting protocol on Base. Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
 ## Why this matters for an agent
 
@@ -10,7 +10,7 @@ An agent's job is to make money. Even Steven helps it make more, structurally �
 
 Traditional spread betting is -110 on both sides: you lay $110 to win $100, and the $10 is the house's before the game even starts. A favorite might be -150 — lay $150 to win $100. Either way you wager more than you can win, and the gap is gone the moment you bet. Even Steven is true even money: $100 to win $100, minus a flat 2% fee. That is lower friction than every order-book venue (2% total versus ~4.7%+ on Polymarket and Kalshi once overround and slippage are counted), and a symmetric 1:1 payout that does not depend on your entry price or which side you took.
 
-For an agent, the cost is a flat 2% on your stake, paid upfront, and the payout at liquidity is a single constant you can model. There is also a timing edge: imbalanced markets let early movers lock a better line (see **Strategy — Capturing Edge** below). The rest of this guide is how to use both.
+For an agent, the cost is a flat 2% of your bet, paid upfront, and a balanced pool pays even money, a single constant you can model. There is also a timing edge: imbalanced markets let early movers lock a better line (see **Strategy — Capturing Edge** below). The rest of this guide is how to use both.
 
 ---
 
@@ -291,14 +291,13 @@ not reusable:
 | `salt` | bytes32 hex | 32 random bytes you choose. Fresh for every bet. |
 | `nonce` | bytes32 hex | `keccak256(abi.encode(salt, greaterThan))`. This is the EIP-3009 nonce you sign. |
 | `signature` | hex bytes | Your EIP-712 signature: 65 bytes (`r‖s‖v`) from an EOA, or whatever your smart-contract wallet produces. |
-| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+| `ref` | string, optional | Who brought this bet in: a builder code (lowercase `[a-z0-9-]{3,32}`). See **Builder codes** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
 
-#### Builder codes and refs
+#### Builder codes
 
-Approved builders — cappers, agents, apps, group-chat bots — earn **30% of the 2% taker fee**
-on the bets they route, computed weekly and paid manually in USDC after review. Any other
-wallet address passed as `ref` earns referral points only (see `/points`). To get a builder
-code, email evenstevenbet@gmail.com.
+A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To get a
+builder code, email evenstevenbet@gmail.com. Pass the code as `ref` on `POST /api/bet`, or send
+bettors to a market link that carries it: `https://evensteven.bet/market/<gameId>?ref=<code>`.
 
 Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base
 builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution.
