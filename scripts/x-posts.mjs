@@ -58,6 +58,14 @@ export function lineText(z, home, away) {
   return `${team} -${Number.isInteger(by) ? by : by.toFixed(1)}`
 }
 
+/** "Packers by 3.5", or "pick'em". Same Z → favourite mapping as lineText. */
+export function byText(z, home, away) {
+  const n = floorLine(z)
+  if (n === 0) return "pick'em"
+  const by = Math.abs(n)
+  return `${n > 0 ? home : away} by ${Number.isInteger(by) ? by : by.toFixed(1)}`
+}
+
 /** "Packers won by 7", "Cowboys won by 3", "Packers and Cowboys tied". finalSpread = home − away. */
 export function resultText(finalSpread, home, away) {
   const n = Number(finalSpread)
@@ -65,11 +73,8 @@ export function resultText(finalSpread, home, away) {
   return `${n > 0 ? home : away} won by ${Math.abs(n)}`
 }
 
-function whole(usdcRaw) { return `$${(usdcRaw / 1_000_000n).toLocaleString('en-US')}` }
-
 /**
- * The three templates. `m` is chain data: { gameId, initialZ, currentZ, stakes (USDC raw, seed excluded),
- * finalSpread }. Returns the text, or throws if the gameId is unusable or the text breaks a rule.
+ * The three templates. `m` is chain data: { gameId, initialZ, currentZ, finalSpread }. Returns the text, or throws if the gameId is unusable or the text breaks a rule.
  */
 export function render(event, m) {
   const g = parseGameId(m.gameId)
@@ -81,11 +86,10 @@ export function render(event, m) {
   if (event === 'opened') {
     text = [`Market open: ${where} (${when}).`,
             `Line: ${lineText(m.initialZ, g.home, g.away)}.`,
-            'Winners split the pool. One flat 2% fee on stake.'].join('\n')
+            'Winners split the pool. Flat 2% on your stake, paid upfront.'].join('\n')
   } else if (event === 'closed') {
     text = [`Betting closed: ${where} (${when}).`,
-            `Closing line: ${lineText(m.currentZ, g.home, g.away)}.`,
-            m.stakes > 0n ? `Stakes in the pool: ${whole(m.stakes)}.` : 'No bets were placed.'].join('\n')
+            `Closing line: ${byText(m.currentZ, g.home, g.away)}.`].join('\n')
   } else if (event === 'settled') {
     text = [`Final: ${resultText(m.finalSpread, g.home, g.away)} (${where}, ${when}).`,
             'Winners can claim their payouts now.'].join('\n')
@@ -237,8 +241,7 @@ async function chainMarkets(rpcUrl, factory, limit = 25) {
     'function gameId() view returns (string)', 'function bettingOpen() view returns (bool)',
     'function settled() view returns (bool)', 'function canceled() view returns (bool)',
     'function refundMode() view returns (bool)', 'function initialZ() view returns (int256)',
-    'function currentZ() view returns (int256)', 'function totalPool() view returns (uint256)',
-    'function protocolSeedTotal() view returns (uint256)', 'function finalSpread() view returns (int256)',
+    'function currentZ() view returns (int256)', 'function finalSpread() view returns (int256)',
   ])
   const all = await pub.readContract({ address: factory, abi, functionName: 'getAllMarkets' })
   const out = []
@@ -249,8 +252,8 @@ async function chainMarkets(rpcUrl, factory, limit = 25) {
     const stage = stageOf({ bettingOpen, settled, canceled, refundMode })
     const m = { address, gameId, stage }
     if (stage !== null) {
-      const [initialZ, currentZ, totalPool, seed] = await Promise.all(['initialZ', 'currentZ', 'totalPool', 'protocolSeedTotal'].map(r))
-      Object.assign(m, { initialZ, currentZ, stakes: totalPool - seed })
+      const [initialZ, currentZ] = await Promise.all(['initialZ', 'currentZ'].map(r))
+      Object.assign(m, { initialZ, currentZ })
       if (stage === 'settled') m.finalSpread = await r('finalSpread')
     }
     out.push(m)

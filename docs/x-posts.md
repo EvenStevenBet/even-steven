@@ -11,17 +11,16 @@ Example values are the live Packers-Cowboys market; `{...}` is filled from chain
 ```
 Market open: Cowboys at Packers (NFL, Oct 18).
 Line: pick'em.
-Winners split the pool. One flat 2% fee on stake.
+Winners split the pool. Flat 2% on your stake, paid upfront.
 ```
 With a line: `Line: Packers -3.5.` (the favourite is named; `Z > 0` means home lays points).
 
 **Betting closed**
 ```
 Betting closed: Cowboys at Packers (NFL, Oct 18).
-Closing line: Packers -4.5.
-Stakes in the pool: $1,234.
+Closing line: Packers by 4.5.
 ```
-With no real bets: `No bets were placed.` instead of the last line. Stakes exclude the protocol seed.
+Pick'em: `Closing line: pick'em.`
 
 **Settled**
 ```

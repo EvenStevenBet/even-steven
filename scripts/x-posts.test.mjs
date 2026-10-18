@@ -5,7 +5,7 @@ import { assertPostable, eligible, lineText, oauthHeader, parseGameId, pendingFo
          runOnce, stageOf } from './x-posts.mjs'
 
 const GID = 'NFL-2026-10-18-HOME-Packers-AWAY-Cowboys'
-const M = { address: '0xaa', gameId: GID, stage: 'opened', initialZ: 35000n, currentZ: 45000n, stakes: 1234_500000n, finalSpread: 7n }
+const M = { address: '0xaa', gameId: GID, stage: 'opened', initialZ: 35000n, currentZ: 45000n, finalSpread: 7n }
 
 test('parseGameId', () => {
   assert.deepEqual(parseGameId(GID), { sport: 'NFL', date: '2026-10-18', month: 10, day: 18, home: 'Packers', away: 'Cowboys', game: null })
@@ -28,10 +28,11 @@ test('result wording follows finalSpread = home - away', () => {
 
 test('templates', () => {
   assert.equal(render('opened', M),
-    'Market open: Cowboys at Packers (NFL, Oct 18).\nLine: Packers -3.5.\nWinners split the pool. One flat 2% fee on stake.')
+    'Market open: Cowboys at Packers (NFL, Oct 18).\nLine: Packers -3.5.\nWinners split the pool. Flat 2% on your stake, paid upfront.')
   assert.equal(render('closed', M),
-    'Betting closed: Cowboys at Packers (NFL, Oct 18).\nClosing line: Packers -4.5.\nStakes in the pool: $1,234.')
-  assert.match(render('closed', { ...M, stakes: 0n }), /No bets were placed\.$/)
+    'Betting closed: Cowboys at Packers (NFL, Oct 18).\nClosing line: Packers by 4.5.')
+  assert.equal(render('closed', { ...M, currentZ: 0n }),
+    "Betting closed: Cowboys at Packers (NFL, Oct 18).\nClosing line: pick'em.")
   assert.equal(render('settled', M),
     'Final: Packers won by 7 (Cowboys at Packers, NFL, Oct 18).\nWinners can claim their payouts now.')
 })
