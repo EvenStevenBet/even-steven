@@ -1,0 +1,63 @@
+name: X market posts
+# Posts three fixed-template events per market (opened, betting closed, settled) to the Even Steven X account.
+# Off by default: nothing posts unless the repository variable X_POSTS_ENABLED is exactly "true" AND the run is
+# not a dry run. A dry run (the default) prints what it would post and writes no state.
+# GitHub's cron fires late or not at all, so this is a backstop for runs dispatched by hand or by other jobs.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the posts that would go out; post nothing, write no state (default true)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: x-posts
+  cancel-in-progress: false  # never cancel a run that may be mid-post
+
+permissions:
+  contents: write  # commits data/x-posts-state.json
+
+jobs:
+  post:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - run: npm ci
+        working-directory: scripts
+      - run: node --test scripts/x-posts.test.mjs
+      - id: post
+        run: node scripts/x-posts.mjs
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          FACTORY_ADDRESS: ${{ secrets.FACTORY_ADDRESS }}
+          # Repository variables, not secrets: a secret "true"/"false" would mask those words in every log line.
+          X_POSTS_ENABLED: ${{ vars.X_POSTS_ENABLED || 'false' }}
+          # Manual dispatch decides for itself; a scheduled run follows the variable and defaults to a dry run.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run && 'true' || 'false') || vars.X_POSTS_DRY_RUN || 'true' }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+      # Runs even when posting failed: the failure (disabled flag, failed attempt) must reach main,
+      # and a post that went out must be recorded or the next run would post it again. If this push
+      # cannot land, the job fails loudly and the next run must not be allowed to proceed unchecked.
+      - name: Commit state if it changed
+        if: always() && steps.post.conclusion != 'skipped'
+        run: |
+          if git diff --quiet -- data/x-posts-state.json; then echo "no change"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/x-posts-state.json
+          git commit -m "data: x posts state"
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            echo "push attempt $i failed"; sleep 5
+          done
+          echo "::error title=X posts state NOT saved::posts may have gone out without being recorded; fix data/x-posts-state.json before the next run"
+          exit 1
