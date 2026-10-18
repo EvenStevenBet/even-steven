@@ -1,0 +1,12 @@
+{
+  "queries": [
+    "\"sports picks\" spread",
+    "\"nfl picks\"",
+    "\"polymarket bot\"",
+    "\"kalshi bot\"",
+    "\"betting model\""
+  ],
+  "suffix": "-is:retweet lang:en",
+  "maxPostsPerRun": 200,
+  "driveFolderName": "Even Steven Growth"
+}
