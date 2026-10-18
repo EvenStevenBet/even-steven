@@ -2,7 +2,7 @@
 
 This document covers everything needed to programmatically interact with Even Steven markets. No UI required.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no spread, no vig. Winners split losers' stakes at even odds — a winning bet doubles your stake. Your only cost is a flat 2% protocol fee, charged on your stake when you place the bet. That 2% is your total friction.
+Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no overround. One flat 2% fee on stake. Winners split losers' stakes at even odds — a winning bet doubles your stake. Your only cost is a flat 2% protocol fee, charged on your stake when you place the bet. That 2% is your total friction.
 
 ## Why this matters for an agent
 
