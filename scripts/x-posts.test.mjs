@@ -36,9 +36,9 @@ test('templates are exactly the approved wording', () => {
   assert.equal(render('settled', { ...M, finalSpread: 0n }), 'Final: Packers and Cowboys tied. Winners split the pool.')
 })
 
-test('no template mentions fees, claims, payouts, multiples or pool sizes', () => {
+test('no template mentions fees, claims, payouts, multiples, pool sizes, builder codes or market creation', () => {
   for (const e of ['opened', 'closed', 'settled']) {
-    assert.doesNotMatch(render(e, M), /fee|2%|claim|payout|\dx|\$|—|vig|profit|gasless/i)
+    assert.doesNotMatch(render(e, M), /fee|2%|claim|payout|\dx|\$|—|vig|profit|gasless|builder|referral|points|commission|30%|permissionless|create/i)
   }
 })
 

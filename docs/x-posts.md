@@ -17,7 +17,7 @@ Approved by Jeff for this PR; `{...}` is filled from chain data. Tests assert th
 - Tie (`finalSpread` of zero): `Final: {Home} and {Away} tied. Winners split the pool.`
 - Doubleheader: `, game 1` or `, game 2` follows the matchup (`Blue Jays at Red Sox, game 1 is open.`). Without it two games would
   post identical text, and X rejects a duplicate as an error, which would disable posting.
-- No fee line, no claim line, no multiple, no pool size. Cancelled and refund markets are never posted.
+- No fee line, no claim line, no multiple, no pool size, and never any builder-code, referral, points or market-creation wording (a test enforces it). Cancelled and refund markets are never posted.
 - The team named is the favourite: home is quoted at `-Z`, so `Z > 0` means home lays points.
 
 Example for the live Packers-Cowboys market (a pick'em):
