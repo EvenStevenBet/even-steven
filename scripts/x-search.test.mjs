@@ -2,7 +2,7 @@
 import crypto from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { COLUMNS, collect, nextBatch, serviceAccountJwt, toRows, xSearch } from './x-search.mjs'
+import { COLUMNS, collect, nextBatch, planWrite, writeTab, serviceAccountJwt, toRows, xSearch } from './x-search.mjs'
 
 const body = ids => ({
   data: ids.map(id => ({ id, author_id: 'u' + id, text: `=SUM(${id})`, created_at: '2026-10-17T00:00:00Z', public_metrics: { like_count: 3, retweet_count: 1 } })),
@@ -57,3 +57,47 @@ test('service account JWT verifies against its public key', () => {
   assert.equal(JSON.parse(Buffer.from(c, 'base64url')).scope, 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly')
 })
 
+
+test('planWrite: no rows never touches the sheet; a failed run never replaces a tab', () => {
+  assert.equal(planWrite({ rows: [], error: new Error('x') }), 'skip')
+  assert.equal(planWrite({ rows: [], error: null }), 'skip')
+  assert.equal(planWrite({ rows: [['a']], error: new Error('x') }), 'write-if-new')
+  assert.equal(planWrite({ rows: [['a']], error: null }), 'write')
+})
+
+function mockGoogle(existingTabs) {
+  const calls = []
+  const real = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    url = String(url); calls.push(`${init.method || 'GET'} ${decodeURIComponent(url)}`)
+    const j = o => ({ ok: true, status: 200, text: async () => JSON.stringify(o), json: async () => o })
+    if (url.includes('oauth2')) return j({ access_token: 't' })
+    if (url.includes('drive/v3')) return j({ files: [{ id: 'X' }] })
+    if (url.includes('fields=sheets')) return j({ sheets: existingTabs.map(title => ({ properties: { title } })) })
+    return j({})
+  }
+  return { calls, restore: () => { globalThis.fetch = real } }
+}
+const sa = () => ({ client_email: 'sa@x', private_key: crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }) })
+
+test('writeTab onlyIfNew leaves an existing tab alone (no clear, no write)', async () => {
+  const m = mockGoogle(['Sheet1', '2026-10-18'])
+  try {
+    const r = await writeTab({ sa: sa(), folderName: 'F', fileName: 'S', tab: '2026-10-18', rows: [['a']], onlyIfNew: true })
+    assert.equal(r.skipped, true)
+    assert.ok(!m.calls.some(c => /:clear|PUT|batchUpdate/.test(c)))
+  } finally { m.restore() }
+})
+
+test('writeTab replaces an existing tab on a clean run and adds a missing one', async () => {
+  let m = mockGoogle(['2026-10-18'])
+  try {
+    await writeTab({ sa: sa(), folderName: 'F', fileName: 'S', tab: '2026-10-18', rows: [['a']] })
+    assert.ok(m.calls.some(c => /:clear/.test(c)) && m.calls.some(c => /^PUT/.test(c)) && !m.calls.some(c => /batchUpdate/.test(c)))
+  } finally { m.restore() }
+  m = mockGoogle(['Sheet1'])
+  try {
+    await writeTab({ sa: sa(), folderName: 'F', fileName: 'S', tab: '2026-10-19', rows: [['a']], onlyIfNew: true })
+    assert.ok(m.calls.some(c => /batchUpdate/.test(c)) && m.calls.some(c => /^PUT/.test(c)))
+  } finally { m.restore() }
+})

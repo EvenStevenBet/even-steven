@@ -119,11 +119,20 @@ async function accessToken(sa) {
 const q = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
 /**
+ * Pure. What to do with a run's rows. A run that found nothing never touches the sheet, and a run that failed
+ * part-way only writes a tab that does not exist yet: it must never replace a fuller tab from an earlier good run.
+ */
+export function planWrite({ rows, error }) {
+  if (rows.length === 0) return 'skip'
+  return error ? 'write-if-new' : 'write'
+}
+
+/**
  * Adds one tab, named by date, to the existing spreadsheet SHEET_FILE_NAME inside the shared folder. The sheet is
  * created by a person (so it counts against their Drive, not the service account's); this never creates a file.
  * Re-running the same day clears and rewrites that day's tab.
  */
-export async function writeTab({ sa, folderName, fileName, tab, rows }) {
+export async function writeTab({ sa, folderName, fileName, tab, rows, onlyIfNew = false }) {
   const token = await accessToken(sa)
   const find = async query => (await googleFetch(
     `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, token)).files
@@ -137,7 +146,9 @@ export async function writeTab({ sa, folderName, fileName, tab, rows }) {
   const base = `https://sheets.googleapis.com/v4/spreadsheets/${id}`
 
   const meta = await googleFetch(`${base}?fields=sheets.properties.title`, token)
-  if (!meta.sheets.some(s => s.properties.title === tab)) {
+  const exists = meta.sheets.some(s => s.properties.title === tab)
+  if (exists && onlyIfNew) return { id, skipped: true }
+  if (!exists) {
     await googleFetch(`${base}:batchUpdate`, token, { method: 'POST', body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab } } }] }) })
   }
   const range = encodeURIComponent(`'${tab}'`)
@@ -145,7 +156,7 @@ export async function writeTab({ sa, folderName, fileName, tab, rows }) {
   // RAW, never USER_ENTERED: post text beginning with "=" must stay text, not become a formula.
   await googleFetch(`${base}/values/${encodeURIComponent(`'${tab}'!A1`)}?valueInputOption=RAW`, token,
     { method: 'PUT', body: JSON.stringify({ values: [COLUMNS, ...rows] }) })
-  return id
+  return { id, skipped: false }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -167,12 +178,18 @@ async function main() {
     console.log(`DRY RUN: would write tab "${date}" of "${SHEET_FILE_NAME}" in "${cfg.driveFolderName}" with ${rows.length} rows`)
     for (const r of rows.slice(0, 10)) console.log(JSON.stringify(r))
   } else {
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set')
-    const sa = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
-    const id = await writeTab({ sa, folderName: cfg.driveFolderName, fileName: SHEET_FILE_NAME, tab: date, rows })
-    console.log(JSON.stringify({ event: 'written', sheet: SHEET_FILE_NAME, tab: date, id, rows: rows.length }))
+    const plan = planWrite({ rows, error })
+    if (plan === 'skip') console.log(JSON.stringify({ event: 'not_written', reason: 'no rows; the sheet was not touched' }))
+    else {
+      if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set')
+      const sa = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
+      const r = await writeTab({ sa, folderName: cfg.driveFolderName, fileName: SHEET_FILE_NAME, tab: date, rows, onlyIfNew: plan === 'write-if-new' })
+      console.log(JSON.stringify(r.skipped
+        ? { event: 'not_written', reason: `run failed part-way and tab ${date} already exists; kept it`, rows: rows.length }
+        : { event: 'written', sheet: SHEET_FILE_NAME, tab: date, id: r.id, rows: rows.length }))
+    }
   }
-  if (error) throw error // rows collected before the failure were still written
+  if (error) throw error // the run still fails loudly; see planWrite for what reached the sheet
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
