@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // Prints each approved builder's links for the open markets. Read-only: it changes nothing.
+// For Jeff only. ES - Context: only Jeff hands out referral links, and bots never write, build or send one.
+// Run it by hand; never from a bot, a workflow or a scheduled job, and never paste its output into bot copy.
 //
 //   node scripts/builder-links.mjs
 //
