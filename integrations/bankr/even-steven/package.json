@@ -1,0 +1,9 @@
+{
+  "name": "even-steven-bankr-skill",
+  "private": true,
+  "type": "module",
+  "description": "Even Steven skill for Bankr agents: markets, odds, two-phase bet, status, claim. Non-custodial.",
+  "scripts": { "test": "node --test scripts/even-steven.test.mjs" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "viem": "2.57.7" }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "slug": "even-steven",
+  "provider": "Even Steven",
+  "providerUrl": "https://evensteven.bet",
+  "logo": null,
+  "demo": {
+    "title": "even-steven.sh",
+    "language": "bash",
+    "code": "# Open games, the line and the pools\nnode scripts/even-steven.mjs markets\n\n# The line and the contract's quote for a 10 USDC stake\nnode scripts/even-steven.mjs odds \"Packers Cowboys\" --stake 10\n\n# Step 1: prepare. Shows the line, the 2% fee and the total. Nothing is signed.\nnode scripts/even-steven.mjs bet --prepare \"Packers Cowboys\" Cowboys 10\n\n# Step 2: after you reply confirm\nnode scripts/even-steven.mjs bet --confirm <intent-id>\n\n# Your bets, and collecting a payout after settlement\nnode scripts/even-steven.mjs status \"Packers Cowboys\"\nnode scripts/even-steven.mjs claim \"Packers Cowboys\""
+  },
+  "setup": [
+    "Install Bankr CLI: `npm install -g @bankr/cli`",
+    "Create an API key at bankr.bot/api-keys with Wallet API on, Read Only off and Trusted Addresses empty",
+    "Fund your Bankr wallet with USDC on Base (no ETH needed to bet)",
+    "In the skill folder run `npm install` (Node 20+), then `node scripts/even-steven.mjs markets`"
+  ],
+  "install": {
+    "type": "bankr",
+    "repoPath": "even-steven",
+    "command": "install the even-steven skill from https://github.com/BankrBot/skills/tree/main/even-steven"
+  }
+}
