@@ -296,8 +296,7 @@ not reusable:
 #### Builder codes
 
 A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To get a
-builder code, email evenstevenbet@gmail.com. Pass the code as `ref` on `POST /api/bet`, or send
-bettors to a market link that carries it: `https://evensteven.bet/market/<gameId>?ref=<code>`.
+builder code, email evenstevenbet@gmail.com. Pass the code in the `ref` field of `POST /api/bet`.
 
 Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base
 builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution.
