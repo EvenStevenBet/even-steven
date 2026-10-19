@@ -2,15 +2,15 @@
 
 This document covers everything needed to programmatically interact with Even Steven markets. No UI required.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. No house, no spread, no vig. Winners split losers' stakes at even odds — a winning bet doubles your stake. Your only cost is a flat 2% protocol fee, charged on your stake when you place the bet. That 2% is your total friction.
+Even Steven is a houseless parimutuel sports betting protocol on Base. There is no house and no spread: winners split the losers' stakes.
 
-## Why this matters for an agent
+- **Even money at liquidity.** When the two sides hold equal money, a winning bet returns exactly 2x its stake, gross of the fee. Before that, the payout depends on how the pools are split at the time betting closes; `getMarketEV` shows both numbers.
+- **The early line.** The line moves as money arrives, and your bet locks the line in force when it lands. Which line you get depends on when you bet; nothing here promises a particular line.
+- **A flat 2% fee on stake, paid upfront.** It is added on top of your stake at placement, never enters the pool, and there is no settlement fee.
 
-An agent's job is to make money. Even Steven helps it make more, structurally — not through a promotion, but through the shape of the product.
+## What an agent can model
 
-Traditional spread betting is -110 on both sides: you lay $110 to win $100, and the $10 is the house's before the game even starts. A favorite might be -150 — lay $150 to win $100. Either way you wager more than you can win, and the gap is gone the moment you bet. Even Steven is true even money: $100 to win $100, minus a flat 2% fee. That is lower friction than every order-book venue (2% total versus ~4.7%+ on Polymarket and Kalshi once overround and slippage are counted), and a symmetric 1:1 payout that does not depend on your entry price or which side you took.
-
-For an agent optimizing returns, that is alpha: more profit retained per win, less drag per loss, and a payout you can model with a single constant. There is also a timing edge — imbalanced markets let early movers lock favorable odds (see **Strategy — Capturing Edge** below). The rest of this guide is how to capture all of it.
+Traditional spread betting is -110 on both sides: you lay $110 to win $100, and the $10 is the house's before the game starts. Even Steven at liquidity is $100 to win $100, plus a flat 2% fee on the stake. That fee is the only protocol cost, and a single constant: the same on every market and every time period, so it is easy to backtest. The payout at liquidity is a single constant too (2x gross), and does not depend on which side you took. Before liquidity, an imbalanced market can pay more or less than 2x on a given side (see **Strategy — Capturing Edge** below). None of this says anything about whether a bet will win: you still have to be right about the game.
 
 ---
 
@@ -28,11 +28,11 @@ const [currentPayout, liquidPayout, impliedVig] = await market.getMarketEV(stake
 await usdc.approve(marketAddress, ethers.MaxUint256);
 await market.placeBet(greaterThan, stake);
 
-// 4. Claim after settlement. Claiming is gasless through POST /api/claim or the claim
-//    button, and depends on the relay being up. If the relay is down, claim directly
-//    with a little ETH:
+// 4. Claim after settlement (see Claiming below)
 await market.claimAllPayouts();
 ```
+
+Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 ---
 
@@ -291,24 +291,9 @@ not reusable:
 | `salt` | bytes32 hex | 32 random bytes you choose. Fresh for every bet. |
 | `nonce` | bytes32 hex | `keccak256(abi.encode(salt, greaterThan))`. This is the EIP-3009 nonce you sign. |
 | `signature` | hex bytes | Your EIP-712 signature: 65 bytes (`r‖s‖v`) from an EOA, or whatever your smart-contract wallet produces. |
-| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+| `ref` | string, optional | An optional attribution string. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
 
-#### Builder codes and refs
-
-Approved builders — cappers, agents, apps, group-chat bots — earn **30% of the 2% taker fee**
-on the bets they route, computed weekly and paid manually in USDC after review. Any other
-wallet address passed as `ref` earns referral points only (see `/points`). To get a builder
-code, email evenstevenbet@gmail.com.
-
-Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base
-builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution.
-It is not a ref and earns nothing. When `ref` resolves, the relay adds it to the same suffix,
-alongside `bc_ncytgilx`, as an
-ERC-8021 schema-0 suffix, so every attributed bet
-carries its ref on-chain. The market ignores trailing calldata; nothing about the bet changes.
-A `ref` that pays the bettor (your own address, or a builder code whose payout address is
-yours) is dropped: self-referral earns nothing. Only the holder of the signed authorization
-can submit it, so only the submitter chooses the ref.
+Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution. It earns partners nothing and does not change the bet.
 
 **Why the nonce is derived, not random.** The signature covers `from`, `to`, `value`,
 `validAfter`, `validBefore` and `nonce` — but not which side you are betting. With a random
@@ -530,6 +515,8 @@ A real `422`, from the example request above sent by a wallet with no USDC:
 
 ### Claiming via the relay (POST /api/claim)
 
+Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+
 `POST https://evensteven.bet/api/claim` collects everything a bettor is owed on one market,
 gaslessly. The relay finds the bettor's claimable bets and submits
 `claimPayoutFor(bettor, betIds)` (see **Relayed claiming** below) in chunks of 25 bets,
@@ -660,7 +647,7 @@ SportsbookFactory v1.6, MarketDeployer v1.1 and the v1.11 markets are verified o
 
 **`createMarket` signature since v1.5** — `(string gameId, int256 oracleZ, uint256 protocolSeed)`,
 a breaking change from v1.4's `(gameId, oracleZ)` and unchanged in v1.6. This does not affect
-agents (only the factory owner/operator calls it), but note it if you're reading factory deploy
+agents (only the factory owner or a whitelisted operator can create markets), but note it if you're reading factory deploy
 logs.
 
 Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover active markets.
@@ -1006,8 +993,7 @@ on the text:
 
 ### Claiming
 
-> Claiming is gasless through `POST /api/claim` or the claim button, and depends on the
-> relay being up. If the relay is down, claim directly with a little ETH.
+> Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 Claiming your own payout directly works on every version:
 
@@ -1305,4 +1291,4 @@ These are not loopholes. They are the protocol working as designed — early liq
 ---
 
 *Even Steven v1.11 (SportsbookFactory v1.6) — September 2026*
-*Audited by Claude: five rounds, March–June 2026 (round 5 covers the v1.8.1 taker-fee model), plus three delta audits — August 2026 (v1.9 UMA identifier fix), September 2026 (v1.10 `placeBetFor`, Factory v1.5) and September 2026 v3 (v1.11 `claimPayoutFor` and `placeBetForWithSignature`, Factory v1.6). All critical and high findings are resolved except R-4 (High: no refund path if the owner abandons a market with betting open), which was deliberately not shipped and remains an accepted risk. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
+*Five internal audit rounds (March–June 2026) plus three delta audits (August and September 2026). Not a formal third-party audit. A professional audit is recommended before significant value is at risk. All critical and high findings are resolved except R-4 (High: no refund path if the owner abandons a market with betting open), which was deliberately not shipped and remains an accepted risk.*
