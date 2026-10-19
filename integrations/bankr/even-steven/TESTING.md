@@ -7,17 +7,17 @@ Nothing here is run by Code. It moves 1.02 USDC from the Bankr wallet, so Jeff r
 1. The Bankr key: Wallet API on, Agent API on, Read Only off, Trusted Addresses empty.
 2. The Bankr wallet holds at least **1.02 USDC** on Base. It needs no ETH.
 3. The relay (`0x8a3eee4f6aD1c03Dc3d898ecD61283560Bd42fed`) has ETH above its minimum (0.002 ETH).
-4. An open market exists: `node scripts/even-steven.mjs markets`. If none is open, wait for one. Do not bet on a closed game.
+4. An open market exists: `node scripts/even-steven.bundle.mjs markets`. If none is open, wait for one. Do not bet on a closed game.
 5. `export ES_MAX_STAKE=1` for this shell, so the script itself refuses anything larger.
 6. Note the Bankr wallet's USDC balance and the relay's USDC balance (the relay should be 0).
 
 ## Steps
 
-1. `node scripts/even-steven.mjs markets` and `odds "<game>" --stake 1`. Both are free chain reads. Record the line.
-2. `node scripts/even-steven.mjs bet --prepare "<game>" <home|away|team> 1`. Check the text: even money, the early line, flat 2% fee on the stake paid upfront, total **1.02 USDC**, "Reply confirm." Note the intent id.
-3. Reply `confirm`, then `node scripts/even-steven.mjs bet --confirm <intent-id>`.
+1. `node scripts/even-steven.bundle.mjs markets` and `odds "<game>" --stake 1`. Both are free chain reads. Record the line.
+2. `node scripts/even-steven.bundle.mjs bet --prepare "<game>" <home|away|team> 1`. Check the text: even money, the early line, flat 2% fee on the stake paid upfront, total **1.02 USDC**, "Reply confirm." Note the intent id.
+3. Reply `confirm`, then `node scripts/even-steven.bundle.mjs bet --confirm <intent-id>`.
 4. Record the output: "Bet placed", the locked line, the bet id, the transaction link.
-5. `node scripts/even-steven.mjs status "<game>"` and confirm the bet appears with the same locked line.
+5. `node scripts/even-steven.bundle.mjs status "<game>"` and confirm the bet appears with the same locked line.
 6. Unset `ES_MAX_STAKE`.
 
 ## Success criteria (all must hold)

@@ -1,13 +1,13 @@
 ---
 name: even-steven
-description: Bet on sports spreads on Base with Even Steven, a houseless parimutuel protocol, and claim winnings. Use when the user wants to see open Even Steven games, check a line or pool, place a bet on a team's side of the spread, check their bets, or claim a payout. Non-custodial: the Bankr wallet signs a USDC authorization, Even Steven's relay pays the gas, and USDC moves straight from the wallet to the market. Bets are 1 to 25 USDC by default.
+description: Bet on sports spreads on Base with Even Steven, a houseless parimutuel protocol, and claim winnings. Use when the user wants to see open Even Steven games, check a line or pool, place a bet on a team's side of the spread, check their bets, or claim a payout. It is non-custodial because the Bankr wallet signs a USDC authorization, Even Steven's relay pays the gas, and USDC moves straight from the wallet to the market. Bets are 1 to 25 USDC by default.
 metadata:
   {
     "clawdbot":
       {
         "emoji": "⚖️",
         "homepage": "https://evensteven.bet",
-        "requires": { "bins": ["node", "bankr"] },
+        "requires": { "bins": ["node"] },
       },
   }
 ---
@@ -31,14 +31,15 @@ Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are 
 
 ## Setup
 
-1. Install the Bankr CLI and log in (`bankr login email you@example.com`).
-2. Create an API key at [bankr.bot/api-keys](https://bankr.bot/api-keys) with **Wallet API enabled, Read Only off, and Trusted Addresses empty**. Typed-data signing is refused when Trusted Addresses are set.
-3. Fund the Bankr wallet with USDC on Base. No ETH is needed to bet: the relay pays the gas.
-4. In this skill's folder run `npm install` (Node 20 or newer).
+1. Use a Bankr API key with **Wallet API enabled, Read Only off, and Trusted Addresses empty**. Typed-data signing is refused when Trusted Addresses are set. Create one at [bankr.bot/api-keys](https://bankr.bot/api-keys) or with `bankr login email you@example.com`.
+2. Fund the Bankr wallet with USDC on Base. No ETH is needed to bet: the relay pays the gas.
+3. Nothing to install. `scripts/even-steven.bundle.mjs` is a single file with its one dependency built in, and needs only Node 20 or newer.
+
+The script finds the Bankr key in this order: `~/.bankr/config.json` (or `$BANKR_CONFIG`), then the `BANKR_API_KEY` environment variable (a real key or a host stand-in), then nothing. With nothing, it sends no key header at all, because a sandboxed host may attach the credential on the network. Never ask the user to paste a key into chat.
 
 ## Commands
 
-All commands are `node scripts/even-steven.mjs <command>`.
+All commands are `node scripts/even-steven.bundle.mjs <command>`.
 
 | Command | What it does |
 |---|---|
@@ -49,16 +50,18 @@ All commands are `node scripts/even-steven.mjs <command>`.
 | `status "<game>"` | Your bets on a game and their locked lines, read from the chain. |
 | `claim "<game>"` | Collects what you are owed on a game through the relay. |
 
+Add `--compact` to any command for short, single-line replies (the value order and "Reply confirm." are kept). Use it on surfaces with tight length limits.
+
 `<game>` is a gameId, a market address, or team names ("Packers Cowboys"). `<side>` is `home`, `away`, or a team name of that game. Quote the game and the team words.
 
 ## Placing a bet
 
 ```
 User: bet $10 on the Cowboys against the Packers
-Agent: node scripts/even-steven.mjs bet --prepare "Packers Cowboys" Cowboys 10
+Agent: node scripts/even-steven.bundle.mjs bet --prepare "Packers Cowboys" Cowboys 10
        (show the script's output exactly; it ends with "Reply confirm.")
 User: confirm
-Agent: node scripts/even-steven.mjs bet --confirm <intent-id>
+Agent: node scripts/even-steven.bundle.mjs bet --confirm <intent-id>
        (relay the script's output: the locked line and the transaction link)
 ```
 
@@ -95,4 +98,5 @@ The first live bet is a 1 USDC test run by the wallet owner, not by the agent. U
 
 - [references/relay-errors.md](references/relay-errors.md): every relay error, what it means and the action.
 - [references/checks.md](references/checks.md): the checks that run before anything is signed.
+- [references/runtime.md](references/runtime.md): where the script runs and what it writes.
 - Website: https://evensteven.bet

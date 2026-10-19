@@ -49,6 +49,7 @@ const FACTORY_ABI = parseAbi([
   'function getOpenMarkets() view returns (address[])',
   'function getAllMarkets() view returns (address[])',
   'function gameIdByMarket(address) view returns (string)',
+  'function marketByGameId(string) view returns (address)',
 ])
 const MARKET_ABI = parseAbi([
   'function FEE_PERCENT() view returns (uint256)',
@@ -241,19 +242,23 @@ export function createCli(deps = {}) {
   const log = deps.log ?? ((l) => console.log(l))
   const out = (...a) => { let t = a.join(' '); if (apiKey) t = t.split(apiKey).join('[REDACTED]'); lines.push(t); log(t) }
 
+  /** The Bankr key, from (1) the config file, (2) BANKR_API_KEY (the real key or a host stand-in), or (3) none: a sandbox host
+   *  may attach the credential at the network layer, so we send no X-API-Key header at all (never an empty one). */
   function loadKey() {
-    if (apiKey) return apiKey
-    if (!fs.existsSync(configPath)) throw new UserError(`Bankr config not found at ${configPath}. Run \`bankr login email <your-email>\` and create a read-write key.`)
-    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-    apiKey = cfg.apiKey || cfg.api_key
-    if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`)
-    return apiKey
+    if (apiKey !== null) return apiKey || null
+    if (fs.existsSync(configPath)) {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+      apiKey = cfg.apiKey || cfg.api_key || ''
+      if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`)
+    } else if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY
+    else apiKey = ''
+    return apiKey || null
   }
   async function call(base_, method, p, body) {
     const url = base_ + p
     if (!url.startsWith(API_BASE + '/') && !url.startsWith(BANKR_API + '/')) throw new Error('refusing to call an unpinned host')
     const headers = { 'content-type': 'application/json', accept: 'application/json' }
-    if (base_ === BANKR_API) headers['X-API-Key'] = loadKey()
+    if (base_ === BANKR_API) { const k = loadKey(); if (k) headers['X-API-Key'] = k }
     const res = await fetchImpl(url, { method, headers, body: body ? JSON.stringify(body) : undefined })
     const text = await res.text()
     let json = null
@@ -262,10 +267,34 @@ export function createCli(deps = {}) {
   }
   async function getWallet() {
     const r = await call(BANKR_API, 'GET', '/wallet/me')
-    if (!r.ok) throw new UserError(`Bankr GET /wallet/me failed (HTTP ${r.status}). Check the key in ${configPath}.`)
+    if (r.status === 401 || r.status === 403) throw new UserError(`Bankr did not authenticate this request (HTTP ${r.status}). Put a Bankr API key in ${configPath} ({"apiKey": "bk_..."}), set BANKR_API_KEY, or run where the host attaches it. Wallet API must be enabled.`)
+    if (!r.ok) throw new UserError(`Bankr GET /wallet/me failed (HTTP ${r.status}).`)
     const evm = (r.json?.wallets || []).find((w) => w.chain === 'evm')
     if (!evm || !isAddress(evm.address)) throw new UserError('Bankr returned no EVM wallet address.')
     return getAddress(evm.address)
+  }
+  let compact = false
+  const ZERO_ADDR = '0x0000000000000000000000000000000000000000'
+  /** Resolve a user's game words, a gameId or a market address. An address or full gameId is looked up directly on the
+   *  factory, so older markets work and the result never depends on a "recent markets" list. */
+  async function resolveMarket(query, scope) {
+    const q = String(query).trim()
+    if (isAddress(q)) {
+      const a = getAddress(q)
+      if (!(await factoryHasMarket(a))) return { error: `${a} was not created by Factory v1.6. Not using it.` }
+      return { match: await readMarket(pc, a) }
+    }
+    if (/^[A-Z0-9]+-\d{4}-\d{2}-\d{2}-HOME-.+-AWAY-.+$/.test(q)) {
+      const a = await pc.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'marketByGameId', args: [q] })
+      if (a && a !== ZERO_ADDR) return { match: await readMarket(pc, getAddress(a)) }
+    }
+    return matchMarket(q, await listMarkets(pc, scope, factory))
+  }
+  function pickMarket(r, game, open) {
+    if (r.error) { out(r.error); return { code: 1 } }
+    if (r.none) { out(`No ${open ? 'open ' : ''}market matches "${game}". Run the markets command${open ? ' to see what is open' : ''}.`); return { code: 3 } }
+    if (r.ambiguous) { out(`More than one ${open ? 'open ' : ''}market matches "${game}". Ask the user which one${open ? ', then prepare again' : ''}:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return { code: 3 } }
+    return { m: r.match }
   }
   const marketBlurb = (m) => `${m.home} (home) vs ${m.away} (away)`
   const intentPath = (id) => path.join(stateDir, 'intents', `${id}.json`)
@@ -294,6 +323,10 @@ export function createCli(deps = {}) {
     const ms = await listMarkets(pc, all ? 'all' : 'open', factory)
     if (!ms.length) { out(all ? 'No markets yet.' : 'No open markets right now.'); return 0 }
     out(all ? `Recent markets (${ms.length}, open or not):` : `Open markets (${ms.length}):`)
+    if (compact) {
+      for (const m of ms) out(`${m.home} v ${m.away}: ${favoriteHeadline(m.z, m.home, m.away)}, pools ${usd(m.gPool)}/${usd(m.lePool)} USDC, ${m.isOpen ? 'open' : 'closed'} [${m.gameId}]`)
+      return 0
+    }
     for (const m of ms) {
       out(`- ${m.gameId}`)
       out(`  ${marketBlurb(m)}. Line: ${favoriteHeadline(m.z, m.home, m.away)} (z ${Number(m.z) / 10_000}, home perspective)`)
@@ -305,12 +338,16 @@ export function createCli(deps = {}) {
 
   // ---- odds ----
   async function cmdOdds(queryWords, stakeText, all = false) {
-    const ms = await listMarkets(pc, all ? 'all' : 'open', factory)
-    const r = matchMarket(queryWords, ms)
-    if (r.none) { out(`No ${all ? '' : 'open '}market matches "${queryWords}". Run the markets command to see what is open.`); return 3 }
-    if (r.ambiguous) { out(`More than one open market matches "${queryWords}". Ask the user which one:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return 3 }
-    const m = r.match
+    const pk = pickMarket(await resolveMarket(queryWords, all ? 'all' : 'open'), queryWords, !all)
+    if (pk.code) return pk.code
+    const m = pk.m
     const stake = parseStake(stakeText ?? '10', maxStake)
+    if (compact) {
+      const [cH, lH] = await pc.readContract({ address: m.address, abi: MARKET_ABI, functionName: 'getMarketEV', args: [stake, true] })
+      const [cA, lA] = await pc.readContract({ address: m.address, abi: MARKET_ABI, functionName: 'getMarketEV', args: [stake, false] })
+      out(`${m.home} v ${m.away}: ${favoriteHeadline(m.z, m.home, m.away)}, ${m.isOpen ? 'open' : 'closed'}. ${usd(stake)} USDC stake, gross if betting closed now: ${m.home} ${usd(cH)}, ${m.away} ${usd(cA)}; balanced pools: ${usd(lH)}. Payout is set at settlement.`)
+      return 0
+    }
     out(`${marketBlurb(m)}  [${m.gameId}]`)
     out(`Line: ${favoriteHeadline(m.z, m.home, m.away)}. Betting ${m.isOpen ? 'open' : 'closed'}. The line moves as bets arrive; a bet locks the line in force when it lands.`)
     out(`Pools: home ${usd(m.gPool)} USDC, away ${usd(m.lePool)} USDC.`)
@@ -326,11 +363,9 @@ export function createCli(deps = {}) {
   async function cmdPrepare(game, sideText, stakeText) {
     const stake = parseStake(stakeText, maxStake)
     const wallet = await getWallet()
-    const ms = await listMarkets(pc, 'open', factory)
-    const r = matchMarket(game, ms)
-    if (r.none) { out(`No open market matches "${game}". Run the markets command to see what is open.`); return 3 }
-    if (r.ambiguous) { out(`More than one open market matches "${game}". Ask the user which one, then prepare again:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return 3 }
-    const m = r.match
+    const pk = pickMarket(await resolveMarket(game, 'open'), game, true)
+    if (pk.code) return pk.code
+    const m = pk.m
     if (!m.isOpen) { out('Betting on that market is closed.'); return 1 }
     const s = parseSide(sideText, m)
     if (!s) { out(`Which side? "${sideText}" does not clearly mean ${m.home} (home) or ${m.away} (away). Ask the user, then prepare again.`); return 3 }
@@ -343,6 +378,11 @@ export function createCli(deps = {}) {
     saveIntent({ id, state: 'pending', createdAt: t, expiresAt: t + INTENT_TTL, wallet, market: m.address, gameId: m.gameId,
                  side: s.side, greaterThan: s.greaterThan, stake: stake.toString(), feeBps: feeBps.toString(), fee: fee.toString(), total: total.toString() })
     const pct = Number(feeBps) / 100
+    if (compact) {
+      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away).split(':')[0]} (${m.home} v ${m.away}). Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`)
+      out('Reply confirm.')
+      return 0
+    }
     out('Confirm this bet?')
     out(`Game: ${marketBlurb(m)}`)
     out(`Your pick: ${lineSentence(m.z, s.side, m.home, m.away)}`)
@@ -402,6 +442,10 @@ export function createCli(deps = {}) {
   function betSuccess(intent, body, m) {
     const z = BigInt(body.lockedZ ?? '0')
     const mk = m ?? parseGameId(intent.gameId)
+    if (compact) {
+      out(`Bet placed: ${lineSentence(z, intent.side, mk.home, mk.away).split(':')[0]}, locked. ${usd(intent.stake)} USDC + ${usd(body.fee ?? intent.fee)} fee. ${BASESCAN}/tx/${body.txHash}`)
+      return
+    }
     out(`Bet placed. ${lineSentence(z, intent.side, mk.home, mk.away)}`)
     out(`Your line locked at ${body.lockedZDisplay ?? Number(z) / 10_000} and does not change; later bets move the line for later bettors.`)
     out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC. Your payout is set at settlement from the final pool.`)
@@ -428,50 +472,103 @@ export function createCli(deps = {}) {
     if (ex.kind === 'resign') out('Run bet --prepare again and have the user confirm again.')
     return 1
   }
+  // ---- atomic state transitions ----
+  // The only way to start signing is to move the intent pending -> signing under an O_EXCL lock file,
+  // so a concurrent or repeated `bet --confirm` can never reach /wallet/sign a second time.
+  const lockPath = (id) => path.join(stateDir, 'intents', `${id}.lock`)
+  function withLock(id, fn) {
+    fs.mkdirSync(path.join(stateDir, 'intents'), { recursive: true, mode: 0o700 })
+    const p = lockPath(id)
+    let fd = null
+    for (let i = 0; i < 50 && fd === null; i++) {
+      try { fd = fs.openSync(p, 'wx', 0o600) } catch (e) {
+        if (e.code !== 'EEXIST') throw e
+        try { if (Date.now() - fs.statSync(p).mtimeMs > 10_000) fs.unlinkSync(p) } catch { /* raced with another run */ }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+      }
+    }
+    if (fd === null) throw new UserError('Another run is updating this bet. Wait a moment and check status before doing anything else.')
+    try { return fn() } finally { try { fs.closeSync(fd) } catch { /* ignore */ } try { fs.unlinkSync(p) } catch { /* ignore */ } }
+  }
+  const pidAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+  const SIGNING_STALE = 120   // seconds
+  /** Returns { intent } when this run now owns signing, or { refuse, code } otherwise. */
+  function claimForSigning(id, t) {
+    return withLock(id, () => {
+      const intent = loadIntent(id)
+      if (intent.state === 'pending') {
+        if (t > intent.expiresAt) { intent.state = 'failed'; saveIntent(intent); return { refuse: 'That prepared bet expired (5 minutes). Run bet --prepare again.', code: 1 } }
+        intent.state = 'signing'; intent.signingPid = process.pid; intent.signingAt = t
+        saveIntent(intent)
+        return { intent }
+      }
+      if (intent.state === 'signing') {
+        if (pidAlive(intent.signingPid) && t - intent.signingAt < SIGNING_STALE) {
+          return { refuse: 'That bet is already being confirmed by another run. Do not confirm it again. Check status in a moment.', code: 4 }
+        }
+        intent.state = 'abandoned'; saveIntent(intent)
+        return { refuse: 'A previous confirm stopped while signing. Nothing was sent and that authorization is never used. Run bet --prepare for a new bet and have the user confirm again.', code: 1 }
+      }
+      return { intent }   // done / failed / abandoned / signed: handled by the caller
+    })
+  }
+  const release = (intent, state) => { intent.state = state; delete intent.signingPid; delete intent.signingAt; saveIntent(intent) }
+
   async function cmdConfirm(id) {
-    const intent = loadIntent(id)
     const t = now()
+    const claim = claimForSigning(id, t)
+    if (claim.refuse) { out(claim.refuse); return claim.code }
+    const intent = claim.intent
     if (intent.state === 'done') { out('That bet was already placed. Nothing to do.'); if (intent.result) betSuccess(intent, intent.result); return 1 }
     if (intent.state === 'failed' || intent.state === 'abandoned') { out('That prepared bet is finished and cannot be confirmed again. Run bet --prepare for a new one.'); return 1 }
     if (intent.state === 'signed') return resume(intent, t)
-    if (intent.state !== 'pending') { out('That prepared bet cannot be confirmed.'); return 1 }
-    if (t > intent.expiresAt) { intent.state = 'failed'; saveIntent(intent); out('That prepared bet expired (5 minutes). Run bet --prepare again.'); return 1 }
+    if (intent.state !== 'signing') { out('That prepared bet cannot be confirmed.'); return 1 }
 
-    // Re-read and re-validate everything before signing.
-    const wallet = await getWallet()
-    if (getAddress(wallet) !== getAddress(intent.wallet)) { out('The Bankr wallet changed since prepare. Run bet --prepare again.'); return 1 }
-    const market = getAddress(intent.market)
-    const st = await readMarket(pc, market)
-    if (!st.isOpen) { out('Betting on that market has closed. Nothing was signed.'); return 1 }
-    const feeBps = await readFee(market)
-    if (feeBps.toString() !== intent.feeBps) { out('The market\'s fee changed since prepare. Nothing was signed. Run bet --prepare again.'); return 1 }
-    const stake = BigInt(intent.stake), fee = BigInt(intent.fee)
-    const salt = randomSalt()
-    const td = buildAuthorization({ wallet, market, stake, fee, greaterThan: intent.greaterThan, salt, t })
-    await preSignChecks({ td, wallet, stake, greaterThan: intent.greaterThan, salt, t })
+    let signCalled = false
+    try {
+      // Re-read and re-validate everything before signing.
+      const wallet = await getWallet()
+      if (getAddress(wallet) !== getAddress(intent.wallet)) { release(intent, 'failed'); out('The Bankr wallet changed since prepare. Run bet --prepare again.'); return 1 }
+      const market = getAddress(intent.market)
+      const st = await readMarket(pc, market)
+      if (!st.isOpen) { release(intent, 'failed'); out('Betting on that market has closed. Nothing was signed.'); return 1 }
+      const feeBps = await readFee(market)
+      if (feeBps.toString() !== intent.feeBps) { release(intent, 'failed'); out('The market\'s fee changed since prepare. Nothing was signed. Run bet --prepare again.'); return 1 }
+      const stake = BigInt(intent.stake), fee = BigInt(intent.fee)
+      const salt = randomSalt()
+      const td = buildAuthorization({ wallet, market, stake, fee, greaterThan: intent.greaterThan, salt, t })
+      await preSignChecks({ td, wallet, stake, greaterThan: intent.greaterThan, salt, t })
 
-    const betsBefore = (await betsOf(market, wallet)).length
-    const sign = await call(BANKR_API, 'POST', '/wallet/sign', { signatureType: 'eth_signTypedData_v4', typedData: td })
-    if (sign.status === 403) {
-      out('Bankr refused to sign (HTTP 403). Body verbatim:')
-      out(sign.text)
-      out('This Bankr key restricts typed-data signing, for example because Trusted Addresses (allowed recipients) are set or the key is read-only. Even Steven bets need an EIP-712 signature. In bankr.bot/api-keys, use a key with Wallet API enabled, Read Only off, and no Trusted Addresses, then try again.')
-      return 2
+      const betsBefore = (await betsOf(market, wallet)).length
+      signCalled = true
+      const sign = await call(BANKR_API, 'POST', '/wallet/sign', { signatureType: 'eth_signTypedData_v4', typedData: td })
+      if (sign.status === 403) {
+        release(intent, 'pending')   // nothing was signed; the user can fix the key and confirm again before it expires
+        out('Bankr refused to sign (HTTP 403). Body verbatim:')
+        out(sign.text)
+        out('This Bankr key restricts typed-data signing, for example because Trusted Addresses (allowed recipients) are set or the key is read-only. Even Steven bets need an EIP-712 signature. In bankr.bot/api-keys, use a key with Wallet API enabled, Read Only off, and no Trusted Addresses, then confirm again.')
+        return 2
+      }
+      if (!sign.ok || !sign.json?.success || typeof sign.json.signature !== 'string') {
+        release(intent, 'failed'); out(`Bankr could not sign (HTTP ${sign.status}). Nothing was sent. Body:`); out(sign.text); return 1
+      }
+      const { signature, signer } = sign.json
+      if (!signer || !isAddress(signer) || getAddress(signer) !== getAddress(wallet)) { release(intent, 'failed'); out('Aborted: the signer Bankr returned is not your wallet. Nothing was sent.'); return 1 }
+      const v = await verifySignature({ wallet, td, signature })
+      if (!v.ok) { release(intent, 'failed'); out(`Aborted: the signature does not verify for your wallet (${v.why || 'mismatch'}). Nothing was sent.`); return 1 }
+
+      const payload = { marketAddress: market, bettor: wallet, greaterThan: intent.greaterThan, stake: stake.toString(),
+        validAfter: '0', validBefore: td.message.validBefore, nonce: td.message.nonce, salt, signature }
+      if (ref) payload.ref = ref
+      Object.assign(intent, { payload, betsBefore, signedAt: t, validBefore: Number(td.message.validBefore), attempts: 0 })
+      release(intent, 'signed')
+      return postBet(intent)
+    } catch (e) {
+      // Nothing is sent to the relay before the payload is saved as `signed`. If we never reached the sign call the
+      // intent goes back to pending (transient error) or failed (a check refused it); either way no authorization exists.
+      if (intent.state === 'signing') release(intent, signCalled || e instanceof UserError ? 'failed' : 'pending')
+      throw e
     }
-    if (!sign.ok || !sign.json?.success || typeof sign.json.signature !== 'string') {
-      out(`Bankr could not sign (HTTP ${sign.status}). Nothing was sent. Body:`); out(sign.text); return 1
-    }
-    const { signature, signer } = sign.json
-    if (!signer || !isAddress(signer) || getAddress(signer) !== getAddress(wallet)) { out('Aborted: the signer Bankr returned is not your wallet. Nothing was sent.'); return 1 }
-    const v = await verifySignature({ wallet, td, signature })
-    if (!v.ok) { out(`Aborted: the signature does not verify for your wallet (${v.why || 'mismatch'}). Nothing was sent.`); return 1 }
-
-    const payload = { marketAddress: market, bettor: wallet, greaterThan: intent.greaterThan, stake: stake.toString(),
-      validAfter: '0', validBefore: td.message.validBefore, nonce: td.message.nonce, salt, signature }
-    if (ref) payload.ref = ref
-    Object.assign(intent, { state: 'signed', payload, betsBefore, signedAt: t, validBefore: Number(td.message.validBefore), attempts: 0 })
-    saveIntent(intent)
-    return postBet(intent)
   }
   /** A signed intent is being confirmed again: follow the relay's retry rule. */
   async function resume(intent, t) {
@@ -504,16 +601,15 @@ export function createCli(deps = {}) {
   // ---- status ----
   async function cmdStatus(game) {
     const wallet = await getWallet()
-    const ms = await listMarkets(pc, 'all', factory)
-    const r = matchMarket(game, ms)
-    if (r.none) { out(`No market matches "${game}".`); return 3 }
-    if (r.ambiguous) { out(`More than one market matches "${game}". Ask the user which one:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return 3 }
-    const m = r.match
+    const pk = pickMarket(await resolveMarket(game, 'all'), game, false)
+    if (pk.code) return pk.code
+    const m = pk.m
     const bets = await betsOf(m.address, wallet)
     out(`${marketBlurb(m)}  [${m.gameId}]  ${m.isSettled ? 'settled' : m.isOpen ? 'betting open' : 'betting closed'}`)
     if (!bets.length) { out('No bets from your Bankr wallet on this market.'); return 0 }
     for (const b of bets) {
       const side = b.greaterThan ? 'home' : 'away'
+      if (compact) { out(`Bet ${b.id}: ${usd(b.stake)} USDC, ${lineSentence(b.lockedZ, side, m.home, m.away).split(':')[0]}, ${b.claimed ? 'claimed' : 'not claimed'}`); continue }
       out(`- Bet ${b.id}: ${usd(b.stake)} USDC. ${lineSentence(b.lockedZ, side, m.home, m.away)}. ${b.claimed ? 'Claimed.' : 'Not claimed.'}`)
     }
     return 0
@@ -522,18 +618,16 @@ export function createCli(deps = {}) {
   // ---- claim ----
   async function cmdClaim(game) {
     const wallet = await getWallet()
-    const ms = await listMarkets(pc, 'all', factory)
-    const r = matchMarket(game, ms)
-    if (r.none) { out(`No market matches "${game}".`); return 3 }
-    if (r.ambiguous) { out(`More than one market matches "${game}". Ask the user which one:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return 3 }
-    const m = r.match
+    const pk = pickMarket(await resolveMarket(game, 'all'), game, false)
+    if (pk.code) return pk.code
+    const m = pk.m
     const res = await call(API_BASE, 'POST', '/api/claim', { marketAddress: m.address, bettor: wallet })
     let code = 0
     if (res.ok && res.json && (res.json.success || res.json.note)) {
       const j = res.json
       if (j.success) {
-        out(`Claimed ${j.claimedCount} bet(s) on ${m.gameId}: ${usd(j.amount)} USDC paid to your wallet.`)
-        for (const h of j.txHashes || []) out(`Transaction: ${BASESCAN}/tx/${h}`)
+        out(`Claimed ${j.claimedCount} bet(s) on ${compact ? `${m.home} v ${m.away}` : m.gameId}: ${usd(j.amount)} USDC paid to your wallet.`)
+        for (const h of j.txHashes || []) out(compact ? `${BASESCAN}/tx/${h}` : `Transaction: ${BASESCAN}/tx/${h}`)
         if (j.remainingCount > 0) out(`${j.remainingCount} more bet(s) remain. Run claim again.`)
         if (j.incomplete) { out(`Stopped early: ${j.incomplete.message || j.incomplete.error}`); code = 1 }
       } else out('Nothing claimable on that market: the market is not settled yet, the bets lost, or they are already claimed.')
@@ -547,7 +641,8 @@ export function createCli(deps = {}) {
 
   async function run(argv) {
     try {
-      const [cmd, ...rest] = argv
+      compact = argv.includes('--compact')
+      const [cmd, ...rest] = argv.filter((a) => a !== '--compact')
       if (cmd === 'markets') return await cmdMarkets(rest.includes('--all'))
       if (cmd === 'odds') {
         const si = rest.indexOf('--stake'); const stakeText = si >= 0 ? rest[si + 1] : undefined
@@ -580,7 +675,9 @@ export function createCli(deps = {}) {
   return { run, lines, preSignChecks, buildAuthorization }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+// Run as a script (argv[1] may be a symlink, e.g. under /tmp on macOS, so compare real paths).
+const isMain = (() => { try { return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href } catch { return false } })()
+if (isMain) {
   const cli = createCli()
   process.exitCode = await cli.run(process.argv.slice(2))
 }

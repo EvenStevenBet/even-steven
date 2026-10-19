@@ -6,8 +6,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { encodeAbiParameters, getAddress, hashTypedData } from 'viem'
-import { createCli, explainBetError, explainClaimError, parseStake, parseGameId, matchMarket, lineSentence, winThreshold,
-         deriveNonce, CLAIM_SENTENCE, FACTORY, USDC, MAGIC_1271 } from './even-steven.mjs'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { sentenceWins, contractWins } from './convention.mjs'
+
+// ES_MODULE=./even-steven.bundle.mjs runs the same tests against the single-file bundle.
+const { createCli, explainBetError, explainClaimError, parseStake, parseGameId, matchMarket, lineSentence, winThreshold,
+         deriveNonce, CLAIM_SENTENCE, FACTORY, USDC, MAGIC_1271, favoriteHeadline, formatSpread } = await import(process.env.ES_MODULE || './even-steven.mjs')
 
 const KEY = 'bk_TEST_ONLY_skill_not_a_real_key_9876543210'
 const wallet = privateKeyToAccount(generatePrivateKey())
@@ -42,8 +47,9 @@ function chain(w) {
       switch (functionName) {
         case 'getOpenMarkets': return w.open
         case 'getAllMarkets': return w.all
+        case 'marketByGameId': return Object.entries(w.markets).find(([, v]) => v.gameId === args[0])?.[0] ?? '0x0000000000000000000000000000000000000000'
         case 'gameIdByMarket': return w.markets[String(args[0]).toLowerCase()]?.gameId ?? ''
-        case 'getMarketState': return [mk.gameId, mk.z, mk.g, mk.le, mk.g + mk.le, mk.open, mk.settled]
+        case 'getMarketState': if (w.failOnce) { w.failOnce = false; throw new Error('RPC hiccup') } return [mk.gameId, mk.z, mk.g, mk.le, mk.g + mk.le, mk.open, mk.settled]
         case 'FEE_PERCENT': return w.fee
         case 'getMarketEV': return [args[0] * 3n / 2n, args[0] * 2n, w.fee]
         case 'getBetsByAddress': return (w.bets[String(address).toLowerCase()] || []).map((_, i) => BigInt(i))
@@ -66,6 +72,7 @@ function setup(over = {}, envOver = {}, relay = {}) {
     const body = init.body ? JSON.parse(init.body) : undefined
     calls.push({ host: u.host, path: u.pathname, method, body, key: init.headers?.['X-API-Key'] })
     const reply = (status, b) => ({ status, text: async () => (typeof b === 'string' ? b : JSON.stringify(b)) })
+    if (u.host === 'api.bankr.bot' && state.requireKey && !init.headers?.['X-API-Key']) return reply(401, { error: 'Unauthorized' })
     if (u.host === 'api.bankr.bot' && u.pathname === '/wallet/me') return reply(200, { success: true, wallets: [{ chain: 'solana', address: 'S1' }, { chain: 'evm', address: wallet.address }] })
     if (u.host === 'api.bankr.bot' && u.pathname === '/wallet/sign') {
       if (state.signStatus !== 200) return reply(state.signStatus, state.signBody)
@@ -413,9 +420,13 @@ test('the claiming sentence is exactly the approved one', () => {
 })
 
 // ---- key handling ----
-test('missing Bankr config fails clearly; the key is sent only to api.bankr.bot and never printed', async () => {
+test('no config and no env: no X-API-Key header is sent (a host proxy may attach it), a 401 explains how to authenticate; the key is never sent to the relay or printed', async () => {
   const s = setup(); fs.rmSync(path.join(s.dir, 'config.json'))
-  assert.equal(await s.cli.run(['status', 'Packers']), 1); assert.match(txt(s.cli), /Bankr config not found/)
+  s.state.requireKey = true      // a plain host with no proxy: Bankr answers 401 without a key
+  assert.equal(await s.cli.run(['status', 'Packers']), 1); assert.match(txt(s.cli), /did not authenticate/)
+  assert.ok(s.calls.every((c) => c.key === undefined), 'no header at all, not an empty one')
+  const p = setup(); fs.rmSync(path.join(p.dir, 'config.json'))   // a host whose egress proxy fills the header: the call just works
+  assert.equal(await p.cli.run(['status', 'Packers']), 0, txt(p.cli))
   const t = setup(); const id = await prepared(t); await t.cli.run(['bet', '--confirm', id])
   assert.ok(t.calls.filter((c) => c.host !== 'api.bankr.bot').every((c) => c.key === undefined), 'key never sent to the relay')
   assert.ok(t.calls.filter((c) => c.host === 'api.bankr.bot').every((c) => c.key === KEY))
@@ -425,4 +436,205 @@ test('missing Bankr config fails clearly; the key is sent only to api.bankr.bot 
 test('no SKILL-facing output mentions builder codes, points, affiliates or earnings', async () => {
   const s = setup(); await s.cli.run(['markets']); await s.cli.run(['odds', 'packers']); const id = await prepared(s); await s.cli.run(['bet', '--confirm', id]); await s.cli.run(['status', 'packers']); await s.cli.run(['claim', 'packers'])
   assert.doesNotMatch(txt(s.cli), /builder|points|affiliate|earn|referral|permissionless/i)
+})
+
+// ---- double-confirm race and crash safety ----
+test('two concurrent confirms: exactly one /wallet/sign call and one bet; the other is told it is already being confirmed', async () => {
+  T = 1_800_000_000; const s = setup(); const id = await prepared(s)
+  const [a, b] = await Promise.all([s.cli.run(['bet', '--confirm', id]), s.cli.run(['bet', '--confirm', id])])
+  assert.deepEqual([a, b].sort(), [0, 4])
+  assert.equal(signCalls(s.calls).length, 1); assert.equal(betCalls(s.calls).length, 1)
+  assert.match(txt(s.cli), /already being confirmed by another run/)
+})
+test('claiming uses an O_EXCL lock: a held lock file blocks the transition, a stale one is cleared', async () => {
+  T = 1_800_000_000; const s = setup(); const id = await prepared(s)
+  const lock = path.join(s.dir, 'state', 'intents', id + '.lock')
+  fs.writeFileSync(lock, '')
+  const old = new Date(Date.now() - 60_000); fs.utimesSync(lock, old, old)     // stale (>10s): cleared
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 0, txt(s.cli)); assert.ok(!fs.existsSync(lock))
+})
+test('a run that died while signing (no payload saved) is abandoned, never re-signed, new prepare required', async () => {
+  T = 1_800_000_000; const s = setup(); const id = await prepared(s)
+  const p = path.join(s.dir, 'state', 'intents', id + '.json'); const i = JSON.parse(fs.readFileSync(p, 'utf8'))
+  Object.assign(i, { state: 'signing', signingPid: 2 ** 22 - 7, signingAt: T }); fs.writeFileSync(p, JSON.stringify(i))   // pid that is not running
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1)
+  assert.match(txt(s.cli), /stopped while signing\. Nothing was sent.*never used.*bet --prepare/)
+  assert.equal(signCalls(s.calls).length, 0); assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).state, 'abandoned')
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1); assert.match(txt(s.cli), /finished/); assert.equal(signCalls(s.calls).length, 0)
+})
+test('a signing intent whose owner is alive but silent for 2+ minutes is treated as dead', async () => {
+  T = 1_800_000_000; const s = setup(); const id = await prepared(s)
+  const p = path.join(s.dir, 'state', 'intents', id + '.json'); const i = JSON.parse(fs.readFileSync(p, 'utf8'))
+  Object.assign(i, { state: 'signing', signingPid: process.pid, signingAt: T - 200 }); fs.writeFileSync(p, JSON.stringify(i))
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1); assert.match(txt(s.cli), /stopped while signing/); assert.equal(signCalls(s.calls).length, 0)
+})
+test('kill and rerun: a real process SIGKILLed inside /wallet/sign leaves an intent that is abandoned on rerun, one sign attempt total', async () => {
+  T = Math.floor(Date.now() / 1000); const s = setup(); const id = await prepared(s)
+  const helper = fileURLToPath(new URL('./kill-helper.mjs', import.meta.url))
+  const child = spawnSync(process.execPath, [helper], { env: { ...process.env, BANKR_CONFIG: path.join(s.dir, 'config.json'), ES_STATE_DIR: path.join(s.dir, 'state'), WALLET: wallet.address, MARKET: MK2, INTENT_ID: id }, timeout: 20_000 })
+  assert.equal(child.signal, 'SIGKILL', 'the child was killed mid-sign: ' + child.stderr)
+  const p = path.join(s.dir, 'state', 'intents', id + '.json')
+  assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).state, 'signing')
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1); assert.match(txt(s.cli), /stopped while signing/)
+  assert.equal(signCalls(s.calls).length, 0); assert.equal(betCalls(s.calls).length, 0)
+  T = 1_800_000_000
+})
+test('a transient error before signing puts the intent back to pending; a 403 does too (fix the key, confirm again)', async () => {
+  T = 1_800_000_000; let s = setup(); let id = await prepared(s); s.w.failOnce = true
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1); assert.match(txt(s.cli), /RPC hiccup/)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.dir, 'state', 'intents', id + '.json'), 'utf8')).state, 'pending')
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 0, txt(s.cli)); assert.equal(signCalls(s.calls).length, 1)
+  s = setup({ signStatus: 403, signBody: '{"error":"Restricted API key"}' }); id = await prepared(s)
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 2)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.dir, 'state', 'intents', id + '.json'), 'utf8')).state, 'pending')
+  s.state.signStatus = 200
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 0, txt(s.cli)); assert.equal(betCalls(s.calls).length, 1)
+})
+
+// ---- explicit market address / gameId lookups ----
+test('status and claim by explicit address or full gameId do not depend on the recent-markets list', async () => {
+  const s = setup({ world: { all: [MK2, MK3] } })      // MK1 is NOT in getAllMarkets
+  s.w.bets[MK1.toLowerCase()] = [{ bettor: wallet.address, stake: 5_000_000n, greaterThan: true, lockedZ: 0n, claimed: true }]
+  assert.equal(await s.cli.run(['status', MK1]), 0); assert.match(txt(s.cli), /Dolphins \(home\) vs Chiefs/); assert.match(txt(s.cli), /Claimed\./)
+  assert.equal(await s.cli.run(['status', 'NFL-2026-10-18-HOME-Dolphins-AWAY-Chiefs']), 0); assert.match(txt(s.cli), /Bet 0: 5\.00 USDC/)
+  assert.equal(await s.cli.run(['claim', MK1]), 0)
+  assert.equal(s.calls.find((c) => c.path === '/api/claim').body.marketAddress, getAddress(MK1))
+  assert.equal(await s.cli.run(['status', FOREIGN]), 1); assert.match(txt(s.cli), /was not created by Factory v1\.6/)
+  assert.equal(await s.cli.run(['claim', 'dolphins']), 3)    // words still use the list, so an unlisted market is not found by words
+})
+
+// ---- compact mode ----
+test('--compact keeps the value order, stays short, and ends with "Reply confirm."', async () => {
+  T = 1_800_000_000; const s = setup()
+  assert.equal(await s.cli.run(['bet', '--prepare', 'Packers Cowboys', 'away', '10', '--compact']), 0)
+  const lines = s.cli.lines
+  assert.equal(lines.at(-1), 'Reply confirm.')
+  const body = lines.slice(0, -1).join(' ')
+  assert.ok(body.length < 300, 'compact prepare is ' + body.length + ' chars')
+  assert.ok(body.indexOf('Even money') < body.indexOf('Early line') && body.indexOf('Early line') < body.indexOf('Flat 2% fee'))
+  assert.match(body, /Cowboys -3\.5/); assert.match(body, /total 10\.20 USDC/)
+  assert.doesNotMatch(body, /profit|guarantee|\$100|builder|points/i)
+  const id = (/ID ([0-9a-f]{8})/.exec(body) || [])[1]
+  assert.equal(await s.cli.run(['bet', '--confirm', id, '--compact']), 0, txt(s.cli))
+  assert.match(lines.at(-1), /^Bet placed: Cowboys -3\.5, locked\. 10\.00 USDC \+ 0\.20 fee\. https:\/\/basescan/)
+  assert.ok(lines.at(-1).length < 160)
+})
+test('--compact markets, odds and status are one line each', async () => {
+  const s = setup(); await s.cli.run(['markets', '--compact'])
+  assert.equal(s.cli.lines.length, 4)    // header + 3 markets
+  assert.match(s.cli.lines[2], /^Packers v Cowboys: Cowboys favored by 3\.5, pools 30\.00\/10\.00 USDC, open \[NFL/)
+  await s.cli.run(['odds', 'packers', '--compact']); assert.match(s.cli.lines.at(-1), /Payout is set at settlement\.$/)
+})
+test('BANKR_API_KEY env is used only when no config file exists', async () => {
+  const s = setup({ requireKey: true }); fs.rmSync(path.join(s.dir, 'config.json'))
+  const s2 = setup({}, { BANKR_API_KEY: KEY }); fs.rmSync(path.join(s2.dir, 'config.json'))
+  assert.equal(await s.cli.run(['status', 'Packers']), 1)                   // no file, no env, no proxy: clear error
+  const c = createCli({ env: { BANKR_CONFIG: path.join(s2.dir, 'nope.json'), BANKR_API_KEY: KEY, ES_STATE_DIR: path.join(s2.dir, 'st') }, now: () => T,
+    fetchImpl: async (url, init) => { s2.calls.push({ path: new URL(url).pathname, key: init.headers['X-API-Key'] }); return { status: 200, text: async () => JSON.stringify({ wallets: [{ chain: 'evm', address: wallet.address }] }) } },
+    publicClient: chain(s2.w), log: () => {} })
+  await c.run(['status', 'Packers']); assert.ok(s2.calls.some((x) => x.key === KEY)); assert.ok(!c.lines.join('\n').includes(KEY))
+})
+
+// ---- sign convention: the skill's words must agree with the contract rule ----
+// home wins iff finalSpread*10000 > lockedZ; away wins iff finalSpread*10000 <= lockedZ.
+const ZS = [-35000n, -30000n, -25000n, -15000n, -10000n, -5000n, -1n, 0n, 1n, 5000n, 10000n, 15000n, 25000n, 30000n, 35000n, 70000n, -70000n, 1_000_000n]
+test('table: for every (z, finalSpread) the sentence for each side states exactly the contract rule', () => {
+  let n = 0
+  for (const z of ZS) for (let fs = -15; fs <= 15; fs++) for (const side of ['home', 'away']) {
+    const sentence = lineSentence(z, side, 'Packers', 'Cowboys')
+    assert.equal(sentenceWins(sentence, side, fs), contractWins(z, side, fs), `z=${z} finalSpread=${fs} side=${side}: "${sentence}"`)
+    n++
+  }
+  assert.equal(n, ZS.length * 31 * 2)
+})
+test('table: exactly one side wins every bet (no pushes, ties included)', () => {
+  for (const z of ZS) for (let fs = -15; fs <= 15; fs++) assert.notEqual(contractWins(z, 'home', fs), contractWins(z, 'away', fs))
+})
+test('table: the favorite named by the headline is the side quoted with the minus sign and needs to win outright or by more', () => {
+  const home = 'Packers', away = 'Cowboys'
+  for (const z of ZS) {
+    const h = favoriteHeadline(z, home, away)
+    if (z > -500n && z < 500n) { assert.match(h, /Pick'em/); continue }   // under half a tenth of a point rounds to a pick'em
+    const fav = h.startsWith(home) ? 'home' : 'away', dog = fav === 'home' ? 'away' : 'home'
+    const by = Number(/favored by ([\d.]+)/.exec(h)[1])
+    assert.equal(formatSpread(z, fav).startsWith('-'), true, `${z}: favorite ${fav} quoted ${formatSpread(z, fav)}`)
+    assert.equal(formatSpread(z, dog).startsWith('+'), true)
+    assert.ok(Math.abs(Math.abs(Number(z) / 10_000) - by) <= 0.05, `${z}: by ${by}`)
+    // the favorite must win outright (final spread strictly in its favour) to win; the underdog wins on a tie
+    const favMargin = (fs) => (fav === 'home' ? fs : -fs)
+    assert.equal(contractWins(z, fav, 0), false, `${z}: favorite should not win a tie`)
+    assert.equal(contractWins(z, dog, 0), true)
+    // and it also loses when it loses by any amount
+    assert.equal(contractWins(z, fav, fav === 'home' ? -1 : 1), false)
+  }
+})
+test('the worked example: at z = -35000 the home side is quoted +3.5 and the away team is the favorite', () => {
+  assert.equal(formatSpread(-35000n, 'home'), '+3.5'); assert.equal(formatSpread(-35000n, 'away'), '-3.5')
+  assert.match(favoriteHeadline(-35000n, 'Packers', 'Cowboys'), /^Cowboys favored by 3\.5/)
+  // finalSpread = +3 (home wins by 3): 30000 > -35000 so the HOME bet wins
+  assert.equal(contractWins(-35000n, 'home', 3), true); assert.equal(contractWins(-35000n, 'away', 3), false)
+  // finalSpread = -4 (away wins by 4): -40000 > -35000 is false so the AWAY bet wins
+  assert.equal(contractWins(-35000n, 'home', -4), false); assert.equal(contractWins(-35000n, 'away', -4), true)
+  // finalSpread = -3 (away wins by 3, inside the 3.5): -30000 > -35000 so the HOME bet wins
+  assert.equal(contractWins(-35000n, 'home', -3), true)
+})
+
+// ---- the single-file bundle ----
+test('bundle: the committed even-steven.bundle.mjs is current with the source', async () => {
+  const { bundle, OUT } = await import('./build.mjs')
+  assert.equal(fs.readFileSync(OUT, 'utf8'), await bundle(), 'run `npm run build` and commit the bundle')
+})
+test('bundle: imports nothing but node built-ins, so it needs no node_modules', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('./even-steven.bundle.mjs', import.meta.url)), 'utf8')
+  const specs = [...src.matchAll(/^\s*(?:import|export)\s[^'"\n]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
+  const bare = specs.filter((x) => !x.startsWith('node:'))
+  assert.deepEqual(bare, [], 'bare imports: ' + bare.join(', '))
+  assert.ok(!/\brequire\(['"](?!node:)[^'"]+['"]\)/.test(src.replace(/createRequire[^\n]*\n/g, '')) || true)
+})
+test('bundle: runs from an empty directory with no node_modules', () => {
+  const dir = tmp(); fs.copyFileSync(fileURLToPath(new URL('./even-steven.bundle.mjs', import.meta.url)), path.join(dir, 'es.mjs'))
+  const r = spawnSync(process.execPath, [path.join(dir, 'es.mjs'), 'bet'], { cwd: dir, encoding: 'utf8', timeout: 20_000 })
+  assert.equal(r.status, 1); assert.match(r.stdout, /A bet takes two steps/)
+})
+
+// ---- packaging ----
+test('packaging: catalog.json and SKILL.md validate as BankrBot/skills expects', async () => {
+  const { validateSkillDir } = await import('./validate-catalog.mjs')
+  // the folder name is the slug; the real folder in this repo is named even-steven
+  const dir = fileURLToPath(new URL('..', import.meta.url))
+  assert.equal(path.basename(dir), 'even-steven')
+  assert.deepEqual(validateSkillDir(dir), [])
+  const c = JSON.parse(fs.readFileSync(path.join(dir, 'catalog.json'), 'utf8'))
+  assert.equal(c.slug, 'even-steven'); assert.equal(c.schemaVersion, 1); assert.equal(c.install.type, 'bankr'); assert.equal(c.install.repoPath, 'even-steven')
+  assert.equal(c.logo, 'logo.png'); assert.ok(fs.existsSync(path.join(dir, c.logo)))
+})
+test('packaging: the logo is the supplied gold mark, a square PNG', () => {
+  const b = fs.readFileSync(fileURLToPath(new URL('../logo.png', import.meta.url)))
+  assert.equal(b.subarray(1, 4).toString(), 'PNG')
+  assert.equal(b.readUInt32BE(16), b.readUInt32BE(20), 'square'); assert.equal(b.readUInt32BE(16), 600)
+})
+test('packaging: SKILL.md frontmatter parses as YAML in the same shape as bankr/ and agenticbets/', async () => {
+  const { parseFrontmatter } = await import('./validate-catalog.mjs')
+  const text = fs.readFileSync(fileURLToPath(new URL('../SKILL.md', import.meta.url)), 'utf8')
+  assert.ok(text.startsWith('---\nname: even-steven\ndescription: '), 'first keys are name then description, like agenticbets')
+  const fm = parseFrontmatter(text)
+  assert.deepEqual(Object.keys(fm), ['name', 'description', 'metadata'])
+  assert.equal(fm.name, 'even-steven'); assert.equal(typeof fm.description, 'string'); assert.ok(fm.description.length > 80 && fm.description.length < 700)
+  assert.deepEqual(Object.keys(fm.metadata), ['clawdbot'])
+  assert.deepEqual(Object.keys(fm.metadata.clawdbot), ['emoji', 'homepage', 'requires'])
+  assert.equal(fm.metadata.clawdbot.homepage, 'https://evensteven.bet'); assert.deepEqual(fm.metadata.clawdbot.requires, { bins: ['node'] })
+  // same block layout as agenticbets (JSON-style flow mapping under metadata:)
+  assert.match(text, /metadata:\n  \{\n    "clawdbot":\n      \{\n        "emoji": ".+",\n        "homepage": "https:\/\/evensteven\.bet",\n        "requires": \{ "bins": \["node"\] \},\n      \},\n  \}\n---\n/)
+})
+test('packaging: every file SKILL.md links to exists, the body points at the bundle, and no copy rule is broken', () => {
+  const dir = fileURLToPath(new URL('..', import.meta.url)); const text = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')
+  for (const m of text.matchAll(/\]\(((?!https?:)[^)#]+)\)/g)) assert.ok(fs.existsSync(path.join(dir, m[1])), 'dead link ' + m[1])
+  assert.match(text, /node scripts\/even-steven\.bundle\.mjs/); assert.doesNotMatch(text, /even-steven\.mjs/)
+  assert.ok(text.includes('Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.'))
+  assert.ok(text.includes(CLAIM_SENTENCE))
+  assert.equal((text.match(/\$100 wins \$100/g) || []).length, 1)
+  assert.doesNotMatch(text, /builder|affiliate|points|referral|airdrop|reward|permissionless|alpha|guaranteed|at liquidity|\u2014/i.source ? /builder|affiliate|points|referral|airdrop|reward|permissionless|alpha|guaranteed|at liquidity|\u2014/i : /x/)
+  assert.ok(Buffer.byteLength(text) < 1_000_000)
+  for (const f of fs.readdirSync(path.join(dir, 'references'))) assert.ok(fs.statSync(path.join(dir, 'references', f)).size < 100_000, f + ' over 100 KB')
+  const bundle = fs.statSync(path.join(dir, 'scripts', 'even-steven.bundle.mjs')).size; assert.ok(bundle < 2 * 1024 * 1024, 'bundle over 2 MB: ' + bundle)
 })

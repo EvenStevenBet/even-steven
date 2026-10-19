@@ -3,7 +3,19 @@
   "private": true,
   "type": "module",
   "description": "Even Steven skill for Bankr agents: markets, odds, two-phase bet, status, claim. Non-custodial.",
-  "scripts": { "test": "node --test scripts/even-steven.test.mjs" },
-  "engines": { "node": ">=20" },
-  "dependencies": { "viem": "2.57.7" }
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test scripts/even-steven.test.mjs",
+    "test:bundle": "ES_MODULE=./even-steven.bundle.mjs node --test scripts/even-steven.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "viem": "2.57.7"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "js-yaml": "5.5.0"
+  }
 }

@@ -45,17 +45,18 @@ const SW = (await pub.waitForTransactionReceipt({ hash: wh })).contractAddress
 await mintUSDC(SW, USD(100))
 
 /** Runs prepare + confirm through the script's real code path. `bettor` is the Bankr wallet address. */
-async function drive({ market, bettor, signFn, relayMode, game, side = 'away', stake = '10', key = 'bk_FORK_TEST_not_a_real_key_000111' }) {
+async function drive({ market, bettor, signFn, relayMode, game, side = 'away', stake = '10', double = false, key = 'bk_FORK_TEST_not_a_real_key_000111' }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'es-fork-'))
   const cfg = path.join(dir, 'config.json'); fs.writeFileSync(cfg, JSON.stringify({ apiKey: key }))
-  const seen = { relayBody: null, fn: null, hash: null, outputs: [] }
+  const seen = { relayBody: null, fn: null, hash: null, outputs: [], relayCalls: 0, signCalls: 0 }
   const fetchImpl = async (url, init = {}) => {
     const u = new URL(url); const body = init.body ? JSON.parse(init.body) : null
     const reply = (status, b) => ({ status, text: async () => JSON.stringify(b) })
     if (u.pathname === '/wallet/me') return reply(200, { success: true, wallets: [{ chain: 'evm', address: bettor.toLowerCase() }] })
+    if (u.pathname === '/wallet/sign') seen.signCalls++
     if (u.pathname === '/wallet/sign') return reply(200, { success: true, signature: await signFn(body.typedData), signer: bettor.toLowerCase(), signatureType: 'eth_signTypedData_v4' })
     if (u.pathname === '/api/bet') {
-      const p = body; seen.relayBody = p
+      const p = body; seen.relayBody = p; seen.relayCalls++
       const sigLen = (p.signature.length - 2) / 2
       const fn = relayMode === 'auto' ? (sigLen === 65 ? 'placeBetFor' : 'placeBetForWithSignature') : relayMode
       seen.fn = fn
@@ -76,10 +77,12 @@ async function drive({ market, bettor, signFn, relayMode, game, side = 'away', s
     throw new Error('unexpected ' + url)
   }
   const blk = await pub.getBlock()
-  const cli = createCli({ env: { BANKR_CONFIG: cfg, ES_STATE_DIR: path.join(dir, 'state') }, now: () => Number(blk.timestamp), fetchImpl,
+  const mk = () => createCli({ env: { BANKR_CONFIG: cfg, ES_STATE_DIR: path.join(dir, 'state') }, now: () => Number(blk.timestamp), fetchImpl,
     publicClient: pub, factory: set.factory, log: (l) => seen.outputs.push(l), randomId: () => 'f0f0f0f0' })
+  const cli = mk()
   const c1 = await cli.run(['bet', '--prepare', game, side, stake])
-  const c2 = c1 === 0 ? await cli.run(['bet', '--confirm', 'f0f0f0f0']) : -1
+  let c2 = -1
+  if (c1 === 0) c2 = double ? await Promise.all([mk().run(['bet', '--confirm', 'f0f0f0f0']), mk().run(['bet', '--confirm', 'f0f0f0f0'])]) : await cli.run(['bet', '--confirm', 'f0f0f0f0'])
   return { c1, c2, seen, text: seen.outputs.join('\n'), key }
 }
 
@@ -150,6 +153,20 @@ section('F5  a signature that does not recover to the wallet never reaches the r
   const r = await drive({ market, bettor: EOA.address, signFn: (td) => signTd(OPP, td), relayMode: 'auto', game: 'Rams Seahawks' })
   eq('F5 confirm aborted', r.c2, 1); eq('F5 relay shim never called', r.seen.relayBody, null)
   ok('F5 output says the signature does not verify', /does not verify/.test(r.text))
+}
+
+// ---- F6: a double confirm ends with exactly one bet ----
+section('F6  two concurrent `bet --confirm` for the same intent: exactly one signature, one relay call, one BetPlaced')
+{
+  const market = await newMarket('Colts', 'Titans'); const before = await bal(EOA.address)
+  const r = await drive({ market, bettor: EOA.address, signFn: (td) => signTd(EOA, td), relayMode: 'auto', game: 'Colts Titans', double: true })
+  eq('F6 prepare ok', r.c1, 0)
+  eq('F6 one confirm succeeded, the other was refused (exit codes)', [...r.c2].sort(), [0, 4])
+  eq('F6 exactly one /wallet/sign call', r.seen.signCalls, 1)
+  eq('F6 exactly one relay submission', r.seen.relayCalls, 1)
+  eq('F6 exactly one bet on chain for the bettor', (await betsOf(market, EOA.address)).length, 1)
+  eq('F6 wallet paid stake + fee once', before - await bal(EOA.address), USD(10.2))
+  ok('F6 the refused run says it is already being confirmed', /already being confirmed/.test(r.text))
 }
 
 const s = summary()
