@@ -2,15 +2,23 @@
 
 This document covers everything needed to programmatically interact with Even Steven markets. No UI required.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. There is no house and no spread: winners split the losers' stakes.
+Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
-- **Even money at liquidity.** When the two sides hold equal money, a winning bet returns exactly 2x its stake, gross of the fee. Before that, the payout depends on how the pools are split at the time betting closes; `getMarketEV` shows both numbers.
-- **The early line.** The line moves as money arrives, and your bet locks the line in force when it lands. Which line you get depends on when you bet; nothing here promises a particular line.
-- **A flat 2% fee on stake, paid upfront.** It is added on top of your stake at placement, never enters the pool, and there is no settlement fee.
+Even Steven is a houseless parimutuel sports betting protocol on Base. Winners split the losing side's stakes.
 
-## What an agent can model
+1. **Even money.** Back either side at even money. The spread moves to balance the pool, so $100 wins $100. A balanced pool pays even money. Your payout is set at settlement from the final pool, so a lopsided pool pays differently.
+2. **The early spread edge.** Get in early and lock a better spread than the crowd gets later. Your bet locks the spread when it lands, and it never changes. Later bets move the spread for later bettors.
+3. **A flat 2% cost.** Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you. The fee is added on top of your stake when you place the bet and never enters the pool. Nothing is taken at settlement.
 
-Traditional spread betting is -110 on both sides: you lay $110 to win $100, and the $10 is the house's before the game starts. Even Steven at liquidity is $100 to win $100, plus a flat 2% fee on the stake. That fee is the only protocol cost, and a single constant: the same on every market and every time period, so it is easy to backtest. The payout at liquidity is a single constant too (2x gross), and does not depend on which side you took. Before liquidity, an imbalanced market can pay more or less than 2x on a given side (see **Strategy — Capturing Edge** below). None of this says anything about whether a bet will win: you still have to be right about the game.
+## Build with Even Steven
+
+For developers and agents. Back either side at even money, lock a better spread by getting in early, and pay a flat 2% of your bet. Nothing else. Everything below works over plain HTTP or directly on-chain, with no UI.
+
+- **Gasless betting.** Sign a USDC authorization in your own wallet and send it to the relay. The relay pays the gas, you need USDC only, and the relay never holds your money.
+- **Claiming.** Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+- **Builder codes.** A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. Even Steven approves each builder. To ask for a builder code, email evenstevenbet@gmail.com. Details are under **Builder codes and refs** below.
+- **Markets.** Only the Even Steven owner or a whitelisted operator creates markets.
+- **Where to start.** Read-only market data and quotes: **HTTP Agent API (x402)**. Placing a bet: **Placing a bet via the relay (POST /api/bet)**. Collecting a payout: **Claiming via the relay (POST /api/claim)**.
 
 ---
 
@@ -32,7 +40,7 @@ await market.placeBet(greaterThan, stake);
 await market.claimAllPayouts();
 ```
 
-Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 ---
 
@@ -291,7 +299,17 @@ not reusable:
 | `salt` | bytes32 hex | 32 random bytes you choose. Fresh for every bet. |
 | `nonce` | bytes32 hex | `keccak256(abi.encode(salt, greaterThan))`. This is the EIP-3009 nonce you sign. |
 | `signature` | hex bytes | Your EIP-712 signature: 65 bytes (`r‖s‖v`) from an EOA, or whatever your smart-contract wallet produces. |
-| `ref` | string, optional | An optional attribution string. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+
+#### Builder codes and refs
+
+A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly.
+
+Builders are approved by Even Steven, and an unapproved code earns nothing. Earnings come from a weekly report, are computed on the bets routed through the code, and are paid manually in USDC after review. To ask for a builder code, email evenstevenbet@gmail.com.
+
+`ref` accepts an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. An unknown or malformed value is ignored and the bet is placed anyway. When `ref` resolves, the relay writes it into an ERC-8021 schema-0 calldata suffix on the same transaction, so the attribution is on-chain. The market ignores trailing calldata, and nothing about the bet changes. A `ref` that would pay the bettor (the bettor's own address, or a builder code whose payout address is the bettor's) is dropped: self-referral earns nothing. Only the holder of the signed authorization can submit it, so only the submitter chooses the ref.
+
+#### Even Steven's own Base builder code
 
 Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution. It earns partners nothing and does not change the bet.
 
@@ -515,7 +533,7 @@ A real `422`, from the example request above sent by a wallet with no USDC:
 
 ### Claiming via the relay (POST /api/claim)
 
-Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 `POST https://evensteven.bet/api/claim` collects everything a bettor is owed on one market,
 gaslessly. The relay finds the bettor's claimable bets and submits
@@ -730,14 +748,14 @@ address[] memory unsettled = factory.getUnsettledMarkets();
 ```solidity
 (
     uint256 currentPayout,   // gross pool payout at current pool ratio
-    uint256 liquidPayout,    // gross pool payout at liquidity (balanced pools)
+    uint256 liquidPayout,    // gross pool payout when the two pools are balanced
     uint256 impliedVig       // protocol fee in bps (200 = 2%)
 ) = market.getMarketEV(stake, greaterThan);
 ```
 
-**Reading `currentPayout`:** Gross return from the pool if the market closed right now. Divide by stake for the multiplier. Use this to capture early-imbalance opportunity. Remember the 2% fee was paid on your stake at placement, so net profit = currentPayout − stake − fee.
+**Reading `currentPayout`:** Gross return from the pool if the market closed right now. Divide by stake for the multiplier. It shows how the pools stand at this moment. The 2% fee was paid on your stake at placement, so your cost is stake + fee and the net is currentPayout − stake − fee.
 
-**Reading `liquidPayout`:** Payout at liquidity, when the Z line has balanced the pools — your steady-state EV. At balance, a $100 stake returns **exactly** $200 gross — this is exact, not an approximation a thin pool merely approaches — net of the $2 placement fee, exactly $98 profit — 2% friction, full stop. This is the number to use for long-run EV modeling. If `currentPayout > liquidPayout`, you're locking favorable early-market odds before opposing flow arrives. If they're equal, the market is already at equilibrium.
+**Reading `liquidPayout`:** The payout when the two pools are balanced, gross of your stake and fee. A balanced pool pays even money: it returns exactly stake × 2. This is exact, not an approximation a thin pool merely approaches. Use it as the single reference number for modeling. If `currentPayout > liquidPayout`, your side currently holds the smaller share of the money. If they are equal, the pools are balanced right now. Either way the payout is set at settlement from the final pool, and later bets can change both numbers before betting closes.
 
 > **Legacy markets only — SportsbookMarket v1.9 and earlier (Factory v1.4 and older)
 > under-quote.** Fixed on-chain in v1.10: on every market from Factory v1.5 or v1.6,
@@ -764,11 +782,11 @@ address[] memory unsettled = factory.getUnsettledMarkets();
 > uint256 correctedLiquidPayout  = stake * distributable / realLiquidSide;
 > ```
 
-**`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. Charged on your stake at placement; there is no settlement haircut, so 2% is the entire story. Compare directly against sportsbook vig (~450 bps at -110) or order-book platforms' stacked taker-fee + overround + slippage. Pool imbalance is not a protocol cost: it is the current split of money between the two sides, and it changes with every bet.
+**`impliedVig`:** The complete protocol cost in basis points. 200 = 2%. It is a flat 2% of your bet, charged on your stake at placement. Nothing else. Nothing is taken at settlement. Pool imbalance is not a protocol cost: it is the current split of money between the two sides, and it changes with every bet.
 
 ### Kelly criterion
 ```javascript
-const grossMultiplier = Number(liquidPayout) / Number(stake); // exactly 2.0 at liquidity (v1.10+; legacy markets need the note above)
+const grossMultiplier = Number(liquidPayout) / Number(stake); // exactly 2.0 when the two pools are balanced (v1.10+; legacy markets need the note above)
 const netOdds = grossMultiplier - 1;
 const feeRate = Number(impliedVig) / 10000;                   // 0.02
 // Cost basis includes the 2% placement fee on stake
@@ -993,7 +1011,7 @@ on the text:
 
 ### Claiming
 
-> Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+> Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 Claiming your own payout directly works on every version:
 
@@ -1013,7 +1031,7 @@ lenient variant — it skips what it cannot claim.
 market.claimPayoutFor(bettor, [id1, id2]);   // submitted by ANY address
 ```
 
-`claimPayoutFor` is **permissionless and takes no signature**. Any relay may call it, and
+`claimPayoutFor` **takes no signature and may be submitted by any address**. Any relay may call it, and
 the USDC is **always** sent to `bettor` — the address recorded on the bet — never to
 `msg.sender`. There is nothing for you to sign: EIP-3009 authorises USDC moving *from* a
 signer, whereas a claim moves USDC from the market *to* you, and the fixed destination
@@ -1063,7 +1081,7 @@ market.executeSettlement();
 
 ## Claiming Payouts
 
-Claiming is gasless through `POST /api/claim` or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
+Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
 
 ```solidity
 // Claim all your bets in one transaction (preferred)
@@ -1216,19 +1234,17 @@ No stake can be permanently locked. Every path terminates in either a settlement
 
 ## Strategy — Capturing Edge
 
-These are not loopholes. They are the protocol working as designed — early liquidity is rewarded, and every mechanic here is transparent and verifiable on-chain. You still have to be right about the game; what follows lowers your cost and widens your edge when you are.
+Your bet locks the spread at the moment it lands, and that spread never changes. Later bets move the spread for later bettors. So the early bettor's edge is the spread they lock: you can lock a better spread than the crowd gets later. The edge is about the spread you lock, not the payout. The payout is set at settlement from the final pool. You still have to be right about the game.
 
-**1. Imbalance is an opportunity, not a risk.** When a market is lopsided — heavy flow on one side — the Z line has already moved to create favorable odds on the *minority* side. Taking the light side at that moment locks a favorable `lockedZ`, which means a wider band of final spreads pays you out than you would get at equilibrium. As opposing flow arrives and the pool rebalances, your locked position only improves relative to the crowd. The more volatile and imbalanced the market, the larger this early-mover edge.
+**1. Lock the spread early.** `lockedZ` is fixed when your transaction is included in a block, and future bets do not touch it. When one side has drawn heavy flow, the spread has already moved to pull the pool toward balance, so the lighter side is quoted a better spread than that side will be quoted once the pool evens out. See `z-line.md` for a worked example.
 
-**2. Read the edge directly from `getMarketEV`.** If `currentPayout > liquidPayout`, your side currently holds the smaller share of the money, so it would pay more than 2× if the pools stayed as they are — later bets can change that before betting closes. If they are equal, the pools are balanced right now (equal money on both sides), and 2× is the payout at that even split. Your bet locks the line when it lands; the payout is set by the pools when betting closes. Poll this, or subscribe to `ZUpdated`, to find markets where the current imbalance favors the side you would take on the merits anyway. Do not chase imbalance for its own sake — pair it with a real view on the outcome.
+**2. Read `getMarketEV`.** `currentPayout` is what your side would return, gross, if betting closed with the pools as they are now. `liquidPayout` is the payout when the two pools are balanced. If `currentPayout` is higher, your side holds the smaller share of the money right now; later bets can change that before betting closes. Poll it, or subscribe to `ZUpdated`, to see where the pools stand. Do not chase imbalance for its own sake: pair it with a real view on the outcome.
 
-**3. Earlier on the minority side means a wider winning range.** `lockedZ` is fixed at your bet time and never changes afterward. Locking a favorable Z early gives you a wider band of final spreads that win. See `z-line.md` for the worked example.
+**3. One cost on every market.** A flat 2% of your bet, paid upfront, the same on every market including low-volume ones. Nothing else. Read `FEE_PERCENT()` to confirm it, and one number covers every backtest.
 
-**4. Flat friction rewards volume and the long tail.** Friction is 2% on every market — Tuesday MLS, niche hockey props, college basketball — versus 5–20%+ on order books for those same illiquid markets. A strategy that is unprofitable on Polymarket after overround and slippage can clear on Even Steven. Because the fee is a single immutable constant, you can backtest with one friction number across every market and every time period.
+**4. Size with Kelly on the true cost basis.** The 2% fee is charged on your stake, so your real cost is `stake * (1 + impliedVig / 10000)`. Fold that into your fraction (see the Kelly snippet under Pre-Bet Evaluation) rather than sizing off the gross payout alone.
 
-**5. Size with Kelly on the true cost basis.** The 2% fee is charged on your stake, so your real cost is `stake * (1 + impliedVig / 10000)`. Fold that into your fraction (see the Kelly snippet under Pre-Bet Evaluation) rather than sizing off the gross payout alone.
-
-**6. Settle your own winning markets.** After a game ends, call `requestSettlement()` yourself — do not wait for anyone else. Your bond returns once the assertion goes undisputed, and `executeSettlement()` unlocks your payout. For an agent already holding a winning position, self-settlement is the fastest path to realized profit.
+**5. Settle your own market.** After a game ends, call `requestSettlement()` yourself instead of waiting for someone else. Settling your own market starts the challenge window sooner, and your bond is returned if the assertion goes undisputed. `executeSettlement()` then unlocks payouts.
 
 ---
 
