@@ -26,7 +26,7 @@ jobs:
           node-version: '20'
       - run: npm ci
         working-directory: scripts
-      - run: node --test scripts/wallet-balance-check.test.mjs
+      - run: node --test scripts/wallet-balance-check.test.mjs scripts/relay-address.test.mjs
       - run: node scripts/wallet-balance-check.mjs
         env:
           BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}

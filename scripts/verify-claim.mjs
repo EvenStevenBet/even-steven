@@ -16,9 +16,10 @@ import {
   createPublicClient, http, parseAbi, formatUnits, formatEther, getAddress, isAddress, isHash, decodeEventLog,
 } from 'viem'
 import { base } from 'viem/chains'
+import { resolveRelayAddress } from './relay-address.mjs'
 
 const USDC = getAddress('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
-const RELAY = getAddress('0x8a3eee4f6aD1c03Dc3d898ecD61283560Bd42fed')
+const RELAY = await resolveRelayAddress() // from data/relay.json, never hard-coded (see relay-address.mjs)
 
 const die = (m) => { console.error('FAIL:', m); process.exit(1) }
 const [argMarket, argBettor, argTx] = process.argv.slice(2)
