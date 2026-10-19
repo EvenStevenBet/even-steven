@@ -9,6 +9,6 @@
   },
   "engines": { "node": ">=20" },
   "dependencies": {
-    "viem": "2.21.54"
+    "viem": "2.57.7"
   }
 }
