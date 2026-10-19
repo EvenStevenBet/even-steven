@@ -1,0 +1,14 @@
+{
+  "name": "even-steven-bankr-probe",
+  "private": true,
+  "type": "module",
+  "description": "Read-only, offline-signature probe: how does a Bankr wallet sign a USDC ReceiveWithAuthorization? Moves no funds.",
+  "scripts": {
+    "probe": "node probe.mjs",
+    "test": "node --test probe.test.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "viem": "2.21.54"
+  }
+}
