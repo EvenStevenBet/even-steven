@@ -106,7 +106,7 @@ Z = initialZ + K * ln(greaterPool / lessEqualPool)
 ```
 
 - Z starts at `oracleZ` — the opening consensus line set at market creation
-- Z is expressed in 4-decimal fixed-point: `-35000` means `-3.5` (Chiefs -3.5)
+- Z is expressed in 4-decimal fixed-point: `-35000` means `-3.5`. The sign is from the home side's point of view and points at the underdog: the home side is quoted `-Z`, so at `-35000` the home side is quoted +3.5 and the away team is the favorite
 - When you place a bet, your `lockedZ` is recorded at that moment and never changes
 - As more money flows to one side, Z moves to attract the other side
 - At equal pools, Z returns exactly to `initialZ`
@@ -117,7 +117,7 @@ Your bet wins if `finalSpread * 10000` crosses your `lockedZ` in the direction y
 - `greaterThan = true`: you win if `finalSpread * 10000 > lockedZ`
 - `greaterThan = false`: you win if `finalSpread * 10000 <= lockedZ`
 
-Example: You bet `greaterThan = true` when Z = `-35000` (Chiefs -3.5). Chiefs win by 7. `finalSpread = 7`, so `70000 > -35000` — you win.
+Example: Chiefs (home) vs 49ers (away), `lockedZ = -35000` (49ers -3.5, Chiefs +3.5). The Chiefs win by 7, so `finalSpread = 7` and `70000 > -35000`: the home bet (`greaterThan = true`) wins. If instead the 49ers win by 4, `finalSpread = -4` and `-40000 > -35000` is false: the away bet (`greaterThan = false`) wins.
 
 ---
 
