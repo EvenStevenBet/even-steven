@@ -1,0 +1,19 @@
+{
+  "name": "@evensteven/agentkit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentKit action provider for Even Steven. Signs with the AgentKit wallet's signTypedData; never sends a transaction itself. Local package, not published.",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run build && vitest run",
+    "test:fork": "npm run build && node test/fork.fork.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "@coinbase/agentkit": "0.10.4", "reflect-metadata": "0.2.2", "viem": "2.57.7", "zod": "3.25.76" },
+  "devDependencies": { "@types/node": "22.15.0", "typescript": "5.8.3", "vitest": "3.2.4" }
+}
