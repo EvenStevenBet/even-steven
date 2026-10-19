@@ -1,0 +1,10 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.EvenStevenBet/even-steven",
+  "title": "Even Steven",
+  "description": "Back either side at even money and lock a better spread by betting early. Flat 2% of your bet.",
+  "version": "0.1.0",
+  "websiteUrl": "https://evensteven.bet",
+  "repository": { "url": "https://github.com/EvenStevenBet/even-steven", "source": "github", "subfolder": "integrations/mcp" },
+  "remotes": [{ "type": "streamable-http", "url": "https://evensteven.bet/mcp" }]
+}

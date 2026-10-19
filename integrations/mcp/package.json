@@ -1,0 +1,10 @@
+{
+  "name": "even-steven-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote MCP server for Even Steven. Holds no keys and signs nothing: the client signs the typed data.",
+  "scripts": { "test": "node --test test/*.test.mjs", "serve": "node src/serve.mjs" },
+  "engines": { "node": ">=20" },
+  "dependencies": { "@modelcontextprotocol/sdk": "1.32.1", "viem": "2.57.7", "zod": "3.25.76" }
+}
