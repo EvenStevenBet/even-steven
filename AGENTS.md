@@ -299,7 +299,7 @@ not reusable:
 | `salt` | bytes32 hex | 32 random bytes you choose. Fresh for every bet. |
 | `nonce` | bytes32 hex | `keccak256(abi.encode(salt, greaterThan))`. This is the EIP-3009 nonce you sign. |
 | `signature` | hex bytes | Your EIP-712 signature: 65 bytes (`r‖s‖v`) from an EOA, or whatever your smart-contract wallet produces. |
-| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. |
+| `ref` | string, optional | Who brought this bet in: an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. See **Builder codes and refs** below. An unknown or malformed `ref` is ignored and the bet is placed anyway. A bet that arrives with a wallet-address `ref` earns that wallet 50 points per USDC. |
 
 #### Builder codes and refs
 
@@ -308,6 +308,8 @@ A builder code earns 30% of the 2% fee on every bet routed through it, paid week
 Builders are approved by Even Steven, and an unapproved code earns nothing. Earnings come from a weekly report, are computed on the bets routed through the code, and are paid manually in USDC after review. To ask for a builder code, email evenstevenbet@gmail.com.
 
 `ref` accepts an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. An unknown or malformed value is ignored and the bet is placed anyway. When `ref` resolves, the relay writes it into an ERC-8021 schema-0 calldata suffix on the same transaction, so the attribution is on-chain. The market ignores trailing calldata, and nothing about the bet changes. A `ref` that would pay the bettor (the bettor's own address, or a builder code whose payout address is the bettor's) is dropped: self-referral earns nothing. Only the holder of the signed authorization can submit it, so only the submitter chooses the ref.
+
+Points are a scoreboard. Bettors earn 100 points per USDC staked, win or lose. A bet that arrives with a wallet-address `ref` earns that wallet 50 points per USDC. Leaderboard at evensteven.bet/points.
 
 #### Even Steven's own Base builder code
 
@@ -542,7 +544,7 @@ one transaction after another, paying the ETH gas. The
 market sends the USDC straight to `bettor`; the relay never touches it.
 
 - **Free.** No x402 fee, no `X-PAYMENT` header, and nothing to sign: `claimPayoutFor` can
-  only pay the bettor recorded on each bet, so anyone may ask for a claim on anyone's behalf.
+  only pay the bettor recorded on each bet, so anyone may ask for a claim for someone else.
 - **Supported markets:** only markets created by SportsbookFactory v1.6 (SportsbookMarket
   v1.11). Older markets return `409 UnsupportedMarket`; claim those directly with
   `claimPayout` / `claimAllPayouts`, which needs a little ETH.
@@ -685,9 +687,14 @@ All USDC amounts are in 6 decimal units: `1 USDC = 1_000_000 = 1e6`
 
 `finalSpread` is a whole integer: `7` means home team won by 7, `-3` means away team won by 3, `0` is a tie.
 
-`lockedZ` and `currentZ` are 4-decimal fixed-point: `-35000` means `-3.5` (home team -3.5 favorite).
+`lockedZ` and `currentZ` are 4-decimal fixed-point: `-35000` means `-3.5`. The sign is from the home side's point of view and points at the underdog: the home side is quoted `-Z` and the away side `+Z`. At `Z = -35000` the home side is quoted +3.5 and the away team is the favorite by 3.5. `currentZDisplay` and `lockedZDisplay` in the API are just `Z / 10000`, not a quoted spread.
 
-Win condition: `finalSpread * 10000` compared against `lockedZ`.
+Win condition: `finalSpread * 10000` compared against `lockedZ`. A home bet (`greaterThan = true`) wins if `finalSpread * 10000 > lockedZ`. An away bet (`greaterThan = false`) wins if `finalSpread * 10000 <= lockedZ`. Exactly one side wins every bet.
+
+Worked example, Packers (home) vs Cowboys (away), `lockedZ = -35000`:
+
+- `finalSpread = +3` (Packers win by 3): `30000 > -35000`, so the home bet wins.
+- `finalSpread = -4` (Cowboys win by 4): `-40000 > -35000` is false, so the away bet wins. (A Cowboys win by only 3 gives `-30000 > -35000`, and the home bet wins.)
 
 The protocol fee is `stake * FEE_PERCENT / 10000` (200 bps = 2%), added on top of the stake and pulled together in `placeBet()`. Only the stake enters the pool.
 
