@@ -28,6 +28,9 @@ import { fileURLToPath } from 'node:url'
 export const V1_6_FACTORY = '0x5906370b9831728ec523b647137a1bbf0ab45390'
 export const EVENTS = ['opened', 'closed', 'settled']
 const RANK = { opened: 0, closed: 1, settled: 2 }
+// Jeff's approved even-money sentence (ES - Context, value order 1), word for word. The only place a post may say
+// "$100 wins $100"; tests pin it. Sentence 2 of the pitch (early line edge) is deliberately not used.
+export const EVEN_MONEY = 'Back either side at even money. The spread moves to balance the pool, so $100 wins $100.'
 const Z_SCALE = 10_000n
 const MAX_LEN = 280
 
@@ -74,7 +77,7 @@ export function render(event, m) {
   const where = `${g.away} at ${g.home}${g.game ? `, game ${g.game}` : ''}`
   let text
   if (event === 'opened') {
-    text = `${where} is open. Line: ${byText(m.initialZ, g.home, g.away)}. Every bet locks the line it gets.`
+    text = `${where} is open. Line: ${byText(m.initialZ, g.home, g.away)}. ${EVEN_MONEY}`
   } else if (event === 'closed') {
     text = `Betting is closed on ${where}. Line closed at ${byText(m.currentZ, g.home, g.away)}.`
   } else if (event === 'settled') {

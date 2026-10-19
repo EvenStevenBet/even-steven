@@ -1,7 +1,7 @@
 // node --test scripts/x-posts.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { assertPostable, byText, eligible, oauthHeader, parseGameId, pendingFor, postToX, render, resultText,
+import { EVEN_MONEY, assertPostable, byText, eligible, oauthHeader, parseGameId, pendingFor, postToX, render, resultText,
          runOnce, stageOf } from './x-posts.mjs'
 
 const GID = 'NFL-2026-10-18-HOME-Packers-AWAY-Cowboys'
@@ -27,8 +27,10 @@ test('result wording follows finalSpread = home - away', () => {
 })
 
 test('templates are exactly the approved wording', () => {
-  assert.equal(render('opened', M), 'Cowboys at Packers is open. Line: Packers by 3.5. Every bet locks the line it gets.')
-  assert.equal(render('opened', { ...M, initialZ: 0n }), "Cowboys at Packers is open. Line: pick'em. Every bet locks the line it gets.")
+  assert.equal(render('opened', M),
+    'Cowboys at Packers is open. Line: Packers by 3.5. Back either side at even money. The spread moves to balance the pool, so $100 wins $100.')
+  assert.equal(render('opened', { ...M, initialZ: 0n }),
+    "Cowboys at Packers is open. Line: pick'em. Back either side at even money. The spread moves to balance the pool, so $100 wins $100.")
   assert.equal(render('closed', M), 'Betting is closed on Cowboys at Packers. Line closed at Packers by 4.5.')
   assert.equal(render('closed', { ...M, currentZ: 0n }), "Betting is closed on Cowboys at Packers. Line closed at pick'em.")
   assert.equal(render('settled', M), 'Final: Packers won by 7. Winners split the pool.')
@@ -36,9 +38,38 @@ test('templates are exactly the approved wording', () => {
   assert.equal(render('settled', { ...M, finalSpread: 0n }), 'Final: Packers and Cowboys tied. Winners split the pool.')
 })
 
-test('no template mentions fees, claims, payouts, multiples, pool sizes, builder codes or market creation', () => {
+test('the even-money sentence is exactly the approved one, and only the opened post carries it', () => {
+  assert.equal(EVEN_MONEY, 'Back either side at even money. The spread moves to balance the pool, so $100 wins $100.')
+  assert.ok(render('opened', M).endsWith(EVEN_MONEY))
+  assert.ok(!render('closed', M).includes('$100') && !render('settled', M).includes('$100'))
+  assert.ok(!render('opened', M).includes('Get in early'), 'sentence 2 of the pitch is not used')
+})
+
+test('no template mentions builder codes, affiliate, referral, points, 30%, market creation, fees, claims or payouts', () => {
+  const forbidden = /builder|affiliate|referral|points|commission|30%|permissionless|creat|fee|2%|claim|payout|vig|profit|gasless|\dx\b|—/i
+  const variants = [
+    ...['opened', 'closed', 'settled'].map((e) => render(e, M)),
+    render('opened', { ...M, initialZ: 0n }), render('closed', { ...M, currentZ: 0n }), render('settled', { ...M, finalSpread: 0n }),
+    render('settled', { ...M, finalSpread: -3n }),
+  ]
+  for (const text of variants) {
+    assert.doesNotMatch(text, forbidden, text)
+    assert.doesNotMatch(text.replace(EVEN_MONEY, ''), /\$/, `a dollar figure outside the approved sentence: ${text}`)
+  }
+})
+
+test('the forbidden-word check really fails when a template mentions one of them', () => {
+  const forbidden = /builder|affiliate|referral|points|commission|30%|permissionless|creat/i
+  for (const bad of ['A builder code earns', 'An affiliate code earns', 'referral', 'points', 'earns 30% of the fee', 'create markets'])
+    assert.match(`Cowboys at Packers is open. ${bad}`, forbidden, bad)
+})
+
+test('every post is plain text under 280 characters, even with the longest team names', () => {
+  const long = { ...M, gameId: 'NFL-2026-10-18-HOME-Jacksonville-Jaguars-AWAY-Washington-Commanders' }
   for (const e of ['opened', 'closed', 'settled']) {
-    assert.doesNotMatch(render(e, M), /fee|2%|claim|payout|\dx|\$|—|vig|profit|gasless|builder|referral|points|commission|30%|permissionless|create/i)
+    const text = render(e, long)
+    assert.ok(text.length < 280, `${e}: ${text.length}`)
+    assert.doesNotMatch(text, /https?:|www\.|[@#]/)
   }
 })
 
@@ -126,6 +157,15 @@ test('any X failure disables posting, records the event, stops, and is never ret
   const again = await runOnce(state, h.io, cfg)
   assert.match(again.halted, /disabled/)
   assert.equal(h.calls.length, 1)
+})
+
+test('a cancelled or refund-mode market produces no post, live or dry', async () => {
+  for (const c of [cfg, { ...cfg, dryRun: true }]) {
+    const h = harness([{ ...M, stage: stageOf({ bettingOpen: false, settled: false, canceled: true, refundMode: true }) },
+                       { ...M, address: '0xcc', stage: stageOf({ bettingOpen: false, settled: true, canceled: false, refundMode: true }) }], [])
+    const r = await runOnce({ disabled: null, markets: {} }, h.io, c)
+    assert.deepEqual([r.posted.length, r.wouldPost.length, h.calls.length], [0, 0, 0])
+  }
 })
 
 test('per-run cap', async () => {
