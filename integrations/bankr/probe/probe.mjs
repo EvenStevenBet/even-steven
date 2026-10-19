@@ -2,7 +2,7 @@
 //
 //   BANKR_API_KEY=bk_... node probe.mjs
 //
-// It calls exactly three Bankr endpoints' worth of surface: GET /wallet/me and
+// It calls only GET /wallet/me and
 // POST /wallet/sign. It never calls /wallet/submit, /wallet/transfer, /wallet/swap
 // or any other write, and it never calls Even Steven's POST /api/bet. The typed data
 // it asks Bankr to sign has validBefore = 1 (1970), so USDC will reject the
@@ -104,14 +104,40 @@ async function bankr(fetchImpl, apiKey, path, init = {}) {
   return { status: res.status, ok: res.ok, text, json }
 }
 
-const FACTORY_ABI = parseAbi(['function getOpenMarkets() view returns (address[])'])
+const FACTORY_ABI = parseAbi([
+  'function getOpenMarkets() view returns (address[])',
+  'function getAllMarkets() view returns (address[])',
+  'function gameIdByMarket(address) view returns (string)',
+])
+
+/**
+ * Pick the market the (expired, never-submitted) authorization is addressed to. It only has to be
+ * a market the v1.6 factory created. Order: explicit override (checked with gameIdByMarket), then
+ * the first open market, then the last market ever created.
+ * Returns { market, source, isOpen } or { error }.
+ */
+export async function selectMarket({ publicClient, override }) {
+  const read = (functionName, args) => publicClient.readContract({ address: FACTORY, abi: FACTORY_ABI, functionName, args })
+  const open = (await read('getOpenMarkets')).map(getAddress)
+  if (override) {
+    if (!isAddress(override)) return { error: `MARKET override is not an address: ${override}` }
+    const market = getAddress(override)
+    const gameId = await read('gameIdByMarket', [market])
+    if (!gameId) return { error: `${market} was not created by Factory v1.6 (gameIdByMarket is empty). Refusing to use it.` }
+    return { market, source: `override (${gameId})`, isOpen: open.includes(market) }
+  }
+  if (open.length) return { market: open[0], source: `first of ${open.length} open`, isOpen: true }
+  const all = await read('getAllMarkets')
+  if (!all.length) return { error: 'Factory v1.6 has created no markets at all. Nothing to address the authorization to.' }
+  return { market: getAddress(all[all.length - 1]), source: `last of ${all.length} created (none open)`, isOpen: false }
+}
 const ERC1271_ABI = parseAbi(['function isValidSignature(bytes32,bytes) view returns (bytes4)'])
 
 /**
  * Runs the probe. Everything external is injectable so the unit tests need no network.
  * Returns { exitCode, result }.
  */
-export async function runProbe({ apiKey, fetchImpl = fetch, publicClient, log = console.log, nowSec, saltBytes = () => randomBytes(32) }) {
+export async function runProbe({ apiKey, fetchImpl = fetch, publicClient, log = console.log, nowSec, marketOverride, saltBytes = () => randomBytes(32) }) {
   const out = (...a) => log(scrub(a.join(' '), apiKey))
   if (!apiKey) { out('BANKR_API_KEY is not set. Run: BANKR_API_KEY=bk_... node probe.mjs'); return { exitCode: 1 } }
 
@@ -130,11 +156,11 @@ export async function runProbe({ apiKey, fetchImpl = fetch, publicClient, log = 
     : cls.kind === 'eip7702' ? `EIP-7702 delegated EOA, delegate ${cls.delegate}`
     : `contract wallet (${size(code)} bytes of code)`)
 
-  // 3. an open v1.6 market to address the authorization to
-  const markets = await publicClient.readContract({ address: FACTORY, abi: FACTORY_ABI, functionName: 'getOpenMarkets' })
-  if (!markets.length) { out('Factory v1.6 has no open market right now. Re-run when one is open.'); return { exitCode: 1 } }
-  const market = getAddress(markets[0])
-  out('Target market       :', market, '(first of', String(markets.length), 'open; nothing is sent to it)')
+  // 3. a market the v1.6 factory created (it need not be open: the authorization is expired and never submitted)
+  const pick = await selectMarket({ publicClient, override: marketOverride })
+  if (pick.error) { out(pick.error); return { exitCode: 1 } }
+  const market = pick.market
+  out('Target market       :', market, `(${pick.source}; ${pick.isOpen ? 'open' : 'NOT open'}; nothing is sent to it)`)
 
   // 4. typed data with an already-expired validBefore
   const salt = toHex(saltBytes())
@@ -199,8 +225,10 @@ export async function runProbe({ apiKey, fetchImpl = fetch, publicClient, log = 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const apiKey = process.env.BANKR_API_KEY
   const publicClient = createPublicClient({ chain: base, transport: http(process.env.BASE_RPC_URL || 'https://mainnet.base.org') })
+  const i = process.argv.indexOf('--market')
+  const marketOverride = (i > 0 ? process.argv[i + 1] : undefined) || process.env.MARKET || undefined
   try {
-    const { exitCode } = await runProbe({ apiKey, publicClient })
+    const { exitCode } = await runProbe({ apiKey, publicClient, marketOverride })
     process.exit(exitCode)
   } catch (e) {
     console.error('probe error:', scrubUrls(scrub(e.shortMessage || e.message, apiKey)))

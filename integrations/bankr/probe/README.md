@@ -12,7 +12,7 @@ BANKR_API_KEY=bk_... node probe.mjs
 ```
 
 Node 20+. The key needs `walletApiEnabled` and must not be read-only, or `/wallet/sign`
-answers 403 (that is itself a useful result: paste it back). Optional `BASE_RPC_URL`
+answers 403 (that is itself a useful result: paste it back). Optional `MARKET` (or `--market <address>`) picks the target market; see step 3. Optional `BASE_RPC_URL`
 overrides the public RPC (`https://mainnet.base.org`); if you set it, nothing here prints it.
 
 ## What it does
@@ -20,7 +20,11 @@ overrides the public RPC (`https://mainnet.base.org`); if you set it, nothing he
 1. `GET https://api.bankr.bot/wallet/me`, prints the Base (EVM) wallet address.
 2. Reads that address's code on Base and classifies it: no code = plain EOA;
    `0xef0100…` = EIP-7702 delegated EOA (prints the delegate); anything else = contract wallet.
-3. Picks the first open market from Factory v1.6 (`getOpenMarkets()`).
+3. Picks a market the Factory v1.6 created. The authorization is expired and never submitted, so
+   it does not need to be open. Order: your override (`MARKET=0x… ` or `--market 0x…`, accepted only
+   if the factory's `gameIdByMarket` is non-empty), else the first open market, else the last
+   market ever created. It prints which one it used and whether it is open. If the factory has
+   created no markets at all it stops with a message.
 4. Builds a `ReceiveWithAuthorization` (USDC domain on Base; from = the Bankr wallet; to = that
    market; value 1020000; nonce = `keccak256(abi.encode(salt, true))` with a random salt).
    **`validBefore` is hard-coded to 1 (1970)**, so USDC rejects the signature as expired

@@ -55,7 +55,7 @@ test('code classification: EOA vs EIP-7702 vs contract', () => {
 })
 
 // ---- end-to-end against mocks -------------------------------------------------
-function mocks({ code = '0x', signFn, signStatus = 200, signBody }) {
+function mocks({ code = '0x', signFn, signStatus = 200, signBody, open = [MARKET], all = [MARKET], gameIds }) {
   const calls = []
   const fetchImpl = async (url, init = {}) => {
     const path = new URL(url).pathname
@@ -71,13 +71,19 @@ function mocks({ code = '0x', signFn, signStatus = 200, signBody }) {
   }
   const publicClient = {
     getCode: async () => code,
-    readContract: async ({ functionName }) => functionName === 'getOpenMarkets' ? [MARKET] : ERC1271_MAGIC,
+    readContract: async ({ functionName, args }) => {
+      if (functionName === 'getOpenMarkets') return open
+      if (functionName === 'getAllMarkets') return all
+      if (functionName === 'gameIdByMarket') return (gameIds ?? { [MARKET.toLowerCase()]: 'NFL-2026-10-18-HOME-A-AWAY-B' })[args[0].toLowerCase()] ?? ''
+      return ERC1271_MAGIC
+    },
   }
   return { calls, fetchImpl, publicClient }
 }
-const run = async (m) => {
+const run = async (m, override) => {
+  m.override = override
   const lines = []
-  const r = await runProbe({ apiKey: FAKE_KEY, fetchImpl: m.fetchImpl, publicClient: m.publicClient, log: l => lines.push(l), nowSec: NOW, saltBytes: () => Buffer.alloc(32, 7) })
+  const r = await runProbe({ apiKey: FAKE_KEY, fetchImpl: m.fetchImpl, publicClient: m.publicClient, log: l => lines.push(l), nowSec: NOW, marketOverride: m.override, saltBytes: () => Buffer.alloc(32, 7) })
   return { ...r, text: lines.join('\n'), lines }
 }
 const signWithAcct = async (td) => acct.signTypedData({
@@ -118,7 +124,7 @@ test('non-65-byte signature (wrapped, ERC-1271 wallet) -> placeBetForWithSignatu
 
 test('EIP-7702 account whose delegate rejects: reported INVALID, not crashed', async () => {
   const m = mocks({ code: '0xef0100' + '63c0c19a282a1B52b07dD5a65b58948A07DAE32B'.toLowerCase(), signFn: signWithAcct })
-  m.publicClient.readContract = async ({ functionName }) => { if (functionName === 'getOpenMarkets') return [MARKET]; throw Object.assign(new Error('x'), { shortMessage: 'reverted at https://rpc.example/KEY123' }) }
+  m.publicClient.readContract = async ({ functionName }) => { if (functionName === 'getOpenMarkets') return [MARKET]; if (functionName !== 'isValidSignature') return []; throw Object.assign(new Error('x'), { shortMessage: 'reverted at https://rpc.example/KEY123' }) }
   const r = await run(m)
   assert.equal(r.result.accountType, 'eip7702')
   assert.equal(r.result.verified, false)
@@ -151,4 +157,51 @@ test('digest helper matches viem signature recovery', async () => {
   const td = buildTypedData({ from: acct.address, to: MARKET, salt: SALT, nowSec: NOW })
   const { recoverAddress } = await import('viem')
   assert.equal(await recoverAddress({ hash: typedDataDigest(td), signature: await signWithAcct(td) }), acct.address)
+})
+
+const OTHER = '0x1111111111111111111111111111111111111111'
+const LAST = '0x2222222222222222222222222222222222222222'
+
+test('no open market: falls back to the LAST entry of getAllMarkets and says it is not open', async () => {
+  const m = mocks({ signFn: signWithAcct, open: [], all: [OTHER, LAST] })
+  const r = await run(m)
+  assert.equal(r.exitCode, 0)
+  assert.ok(r.text.includes('0x2222222222222222222222222222222222222222'))
+  assert.match(r.text, /last of 2 created \(none open\); NOT open/)
+})
+
+test('open market exists: first open is used and reported open', async () => {
+  const m = mocks({ signFn: signWithAcct, open: [MARKET, OTHER], all: [OTHER, MARKET] })
+  const r = await run(m)
+  assert.match(r.text, /first of 2 open; open/)
+})
+
+test('MARKET override is validated with gameIdByMarket and used (reported open or not)', async () => {
+  const m = mocks({ signFn: signWithAcct, open: [], all: [LAST] })
+  const r = await run(m, MARKET)
+  assert.equal(r.exitCode, 0)
+  assert.match(r.text, new RegExp(MARKET + ' \\(override \\(NFL-2026-10-18-HOME-A-AWAY-B\\); NOT open'))
+})
+
+test('override that is not a factory market is rejected before anything is signed', async () => {
+  const m = mocks({ signFn: signWithAcct })
+  const r = await run(m, OTHER)
+  assert.equal(r.exitCode, 1)
+  assert.match(r.text, /not created by Factory v1\.6/)
+  assert.deepEqual(m.calls.map(c => c.path), ['/wallet/me'])   // never reached /wallet/sign
+})
+
+test('override that is not an address is rejected', async () => {
+  const m = mocks({ signFn: signWithAcct })
+  const r = await run(m, 'not-an-address')
+  assert.equal(r.exitCode, 1)
+  assert.match(r.text, /not an address/)
+})
+
+test('factory has created no markets at all: clear message, exit 1, nothing signed', async () => {
+  const m = mocks({ signFn: signWithAcct, open: [], all: [] })
+  const r = await run(m)
+  assert.equal(r.exitCode, 1)
+  assert.match(r.text, /created no markets at all/)
+  assert.deepEqual(m.calls.map(c => c.path), ['/wallet/me'])
 })
