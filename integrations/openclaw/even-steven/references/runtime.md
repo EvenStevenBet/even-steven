@@ -14,7 +14,7 @@ their scripts. Items marked **unverified** are not stated in the docs and need a
   does not install anything, and language runtimes such as Python are not installed.
 - Credentials can be host-managed: the key may be in `BANKR_API_KEY` (a real key or a stand-in) or attached by an egress proxy
   at the network layer, in which case no key is visible to the process (BankrBot/skills `bankr/references/safety.md`). The script
-  therefore reads the config file, then `BANKR_API_KEY`, then sends no header at all (never an empty `X-API-Key`).
+  therefore reads `BANKR_API_KEY` first, then the config file, then sends no header at all (never an empty `X-API-Key`).
 - Secrets for scripts can be stored as encrypted per-wallet environment variables that a skill or `execute_cli` script reads.
 - MCP servers are not used on X or Farcaster. The docs do not list skills or `execute_cli` as unavailable there.
 
