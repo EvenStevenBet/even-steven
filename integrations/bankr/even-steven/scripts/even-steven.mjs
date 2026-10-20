@@ -4,6 +4,7 @@
 // gas, and USDC moves straight from the bettor to the market. This script never submits a
 // transaction itself and never calls /wallet/submit, /wallet/transfer or /wallet/swap.
 //
+//   node scripts/even-steven.mjs wallet
 //   node scripts/even-steven.mjs markets [--all]
 //   node scripts/even-steven.mjs odds "<game>" [--stake 10] [--all]
 //   node scripts/even-steven.mjs bet --prepare "<game>" <side> <stake>
@@ -23,6 +24,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
+import { findTeamRefs } from './teams.mjs'
 
 // ---- pinned values -------------------------------------------------------------------------
 export const FACTORY = '0x5906370b9831728ec523b647137a1bbf0ab45390'
@@ -58,10 +60,12 @@ const MARKET_ABI = parseAbi([
   'function getBetsByAddress(address) view returns (uint256[])',
   'function getBet(uint256) view returns ((address bettor, uint256 stake, bool greaterThan, int256 lockedZ, bool claimed))',
 ])
+const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)'])
 const ERC1271_ABI = parseAbi(['function isValidSignature(bytes32,bytes) view returns (bytes4)'])
 
 // ---- small helpers -------------------------------------------------------------------------
 const usd = (n) => (Number(formatUnits(BigInt(n), 6))).toFixed(2)
+export const shortAddr = (a) => `${String(a).slice(0, 6)}…${String(a).slice(-4)}`
 const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '')
 
 export function parseStake(text, maxStakeUsdc = DEFAULT_MAX_STAKE) {
@@ -133,12 +137,30 @@ const STOP = new Set(['vs', 'v', 'at', 'the', 'game', 'home', 'away', 'bet', 'on
 /** Match a user's words against known markets. Returns { match } | { ambiguous: [...] } | { none: true }. */
 export function matchMarket(query, markets) {
   const q = String(query).trim()
+  // An address or an exact gameId bypasses all fuzzy matching.
   if (isAddress(q)) {
     const hit = markets.filter((m) => m.address.toLowerCase() === q.toLowerCase())
     return hit.length ? { match: hit[0] } : { none: true }
   }
   const exact = markets.filter((m) => m.gameId.toLowerCase() === q.toLowerCase())
   if (exact.length === 1) return { match: exact[0] }
+  // Team aliases (nickname, city, abbreviation). An alias that names more than one team ("New York", "LA") asks, even if only one
+  // such game is on the board, unless another word in the query names one of those teams.
+  const sports = new Set(markets.map((m) => m.sport).filter(Boolean))
+  const { refs, rest } = findTeamRefs(q, sports.size ? sports : undefined)
+  if (refs.length) {
+    const named = new Set(refs.filter((r) => r.teams.length === 1).map((r) => r.teams[0]))
+    const open = refs.find((r) => r.teams.length > 1 && !r.teams.some((t) => named.has(t)))
+    if (open) return { ask: `"${open.phrase}" could be the ${open.teams.map((t) => t.nick).join(' or the ')}. Ask the user which team.` }
+    const need = [...named]
+    const extra = rest.filter((t) => t.length >= 2 && !STOP.has(t))
+    const hits = markets.filter((m) => {
+      const teams = [norm(m.home), norm(m.away)], g = norm(m.gameId)
+      return need.every((t) => teams.includes(t.key) && (!m.sport || m.sport === t.sport)) && extra.every((t) => g.includes(t.replace(/[^a-z0-9]/g, '')))
+    })
+    if (hits.length === 1) return { match: hits[0] }
+    return hits.length ? { ambiguous: hits } : { none: true }
+  }
   const tokens = q.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2 && !STOP.has(t))
   if (!tokens.length) return { none: true }
   const hits = markets.filter((m) => { const g = norm(m.gameId); return tokens.every((t) => g.includes(t)) })
@@ -151,6 +173,13 @@ export function parseSide(text, market) {
   if (t === 'home') return { greaterThan: true, side: 'home' }
   if (t === 'away') return { greaterThan: false, side: 'away' }
   const h = norm(market.home), a = norm(market.away)
+  const { refs } = findTeamRefs(text, market.sport ? new Set([market.sport]) : undefined)
+  if (refs.length) {
+    const sides = new Set()
+    for (const r of refs) for (const tm of r.teams) { if (tm.key === h) sides.add('home'); if (tm.key === a) sides.add('away') }
+    if (sides.size === 1) return sides.has('home') ? { greaterThan: true, side: 'home' } : { greaterThan: false, side: 'away' }
+    if (sides.size === 2) return null
+  }
   const isH = t.length >= 2 && (h.includes(t) || t.includes(h)), isA = t.length >= 2 && (a.includes(t) || t.includes(a))
   if (isH && !isA) return { greaterThan: true, side: 'home' }
   if (isA && !isH) return { greaterThan: false, side: 'away' }
@@ -242,16 +271,16 @@ export function createCli(deps = {}) {
   const log = deps.log ?? ((l) => console.log(l))
   const out = (...a) => { let t = a.join(' '); if (apiKey) t = t.split(apiKey).join('[REDACTED]'); lines.push(t); log(t) }
 
-  /** The Bankr key, from (1) the config file, (2) BANKR_API_KEY (the real key or a host stand-in), or (3) none: a sandbox host
+  /** The Bankr key, from (1) BANKR_API_KEY (the real key or a host stand-in), (2) the config file, or (3) none: a sandbox host
    *  may attach the credential at the network layer, so we send no X-API-Key header at all (never an empty one). */
   function loadKey() {
     if (apiKey !== null) return apiKey || null
-    if (fs.existsSync(configPath)) {
+    if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY
+    else if (fs.existsSync(configPath)) {
       const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'))
       apiKey = cfg.apiKey || cfg.api_key || ''
       if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`)
-    } else if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY
-    else apiKey = ''
+    } else apiKey = ''
     return apiKey || null
   }
   async function call(base_, method, p, body) {
@@ -292,6 +321,7 @@ export function createCli(deps = {}) {
   }
   function pickMarket(r, game, open) {
     if (r.error) { out(r.error); return { code: 1 } }
+    if (r.ask) { out(r.ask); return { code: 3 } }
     if (r.none) { out(`No ${open ? 'open ' : ''}market matches "${game}". Run the markets command${open ? ' to see what is open' : ''}.`); return { code: 3 } }
     if (r.ambiguous) { out(`More than one ${open ? 'open ' : ''}market matches "${game}". Ask the user which one${open ? ', then prepare again' : ''}:`); r.ambiguous.forEach((m) => out(`- ${m.gameId}`)); return { code: 3 } }
     return { m: r.match }
@@ -311,11 +341,20 @@ export function createCli(deps = {}) {
     const gid = await pc.readContract({ address: factory, abi: FACTORY_ABI, functionName: 'gameIdByMarket', args: [addr] })
     return !!gid
   }
+  const usdcBalance = (who) => pc.readContract({ address: USDC, abi: ERC20_ABI, functionName: 'balanceOf', args: [who] })
   const readFee = (addr) => pc.readContract({ address: addr, abi: MARKET_ABI, functionName: 'FEE_PERCENT' })
   async function betsOf(market, wallet) {
     const ids = await pc.readContract({ address: market, abi: MARKET_ABI, functionName: 'getBetsByAddress', args: [wallet] })
     const bets = await Promise.all(ids.map((id) => pc.readContract({ address: market, abi: MARKET_ABI, functionName: 'getBet', args: [id] }).then((b) => ({ id, ...b }))))
     return bets
+  }
+
+  // ---- wallet ----
+  async function cmdWallet() {
+    const w = await getWallet()
+    const bal = await usdcBalance(w)
+    out(compact ? `Wallet ${shortAddr(w)} (${w}): ${usd(bal)} USDC on Base.` : `Bankr wallet: ${w} (${shortAddr(w)})\nUSDC on Base: ${usd(bal)}`)
+    return 0
   }
 
   // ---- markets ----
@@ -373,18 +412,21 @@ export function createCli(deps = {}) {
     const feeBps = await readFee(m.address)
     const fee = (stake * feeBps) / 10_000n
     const total = stake + fee
+    const have = await usdcBalance(wallet)
+    if (have < total) { out(`Not enough USDC. This bet needs ${usd(total)} USDC (stake ${usd(stake)} + fee ${usd(fee)}) and wallet ${shortAddr(wallet)} holds ${usd(have)} USDC on Base. Nothing was prepared.`); return 1 }
     const id = randomId()
     const t = now()
     saveIntent({ id, state: 'pending', createdAt: t, expiresAt: t + INTENT_TTL, wallet, market: m.address, gameId: m.gameId,
                  side: s.side, greaterThan: s.greaterThan, stake: stake.toString(), feeBps: feeBps.toString(), fee: fee.toString(), total: total.toString() })
     const pct = Number(feeBps) / 100
     if (compact) {
-      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away).split(':')[0]} (${m.home} v ${m.away}). Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`)
+      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away)} (${m.home} v ${m.away}), from ${shortAddr(wallet)}. Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`)
       out('Reply confirm.')
       return 0
     }
     out('Confirm this bet?')
     out(`Game: ${marketBlurb(m)}`)
+    out(`From wallet: ${shortAddr(wallet)}`)
     out(`Your pick: ${lineSentence(m.z, s.side, m.home, m.away)}`)
     out('1. Even money: back either side at even money. The spread moves to balance the pool, and a balanced pool pays even money. Your payout is set at settlement from the final pool.')
     out(`2. The early line: this line locks when your bet lands and never changes. Later bets move the line for later bettors. Current line: ${favoriteHeadline(m.z, m.home, m.away)}.`)
@@ -443,12 +485,12 @@ export function createCli(deps = {}) {
     const z = BigInt(body.lockedZ ?? '0')
     const mk = m ?? parseGameId(intent.gameId)
     if (compact) {
-      out(`Bet placed: ${lineSentence(z, intent.side, mk.home, mk.away).split(':')[0]}, locked. ${usd(intent.stake)} USDC + ${usd(body.fee ?? intent.fee)} fee. ${BASESCAN}/tx/${body.txHash}`)
+      out(`Bet placed: ${lineSentence(z, intent.side, mk.home, mk.away)}. Locked. ${usd(intent.stake)} USDC + ${usd(body.fee ?? intent.fee)} fee from ${shortAddr(intent.wallet)}. ${BASESCAN}/tx/${body.txHash}`)
       return
     }
     out(`Bet placed. ${lineSentence(z, intent.side, mk.home, mk.away)}`)
     out(`Your line locked at ${body.lockedZDisplay ?? Number(z) / 10_000} and does not change; later bets move the line for later bettors.`)
-    out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC. Your payout is set at settlement from the final pool.`)
+    out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC, from wallet ${shortAddr(intent.wallet)}. Your payout is set at settlement from the final pool.`)
     out(`Bet id ${body.betId}. Transaction: ${BASESCAN}/tx/${body.txHash}`)
   }
   const relayPayload = (i) => i.payload
@@ -535,6 +577,8 @@ export function createCli(deps = {}) {
       const feeBps = await readFee(market)
       if (feeBps.toString() !== intent.feeBps) { release(intent, 'failed'); out('The market\'s fee changed since prepare. Nothing was signed. Run bet --prepare again.'); return 1 }
       const stake = BigInt(intent.stake), fee = BigInt(intent.fee)
+      const have = await usdcBalance(wallet)
+      if (have < stake + fee) { release(intent, 'failed'); out(`Not enough USDC: this bet needs ${usd(stake + fee)} and wallet ${shortAddr(wallet)} holds ${usd(have)}. Nothing was signed. Fund the wallet and prepare again.`); return 1 }
       const salt = randomSalt()
       const td = buildAuthorization({ wallet, market, stake, fee, greaterThan: intent.greaterThan, salt, t })
       await preSignChecks({ td, wallet, stake, greaterThan: intent.greaterThan, salt, t })
@@ -609,7 +653,7 @@ export function createCli(deps = {}) {
     if (!bets.length) { out('No bets from your Bankr wallet on this market.'); return 0 }
     for (const b of bets) {
       const side = b.greaterThan ? 'home' : 'away'
-      if (compact) { out(`Bet ${b.id}: ${usd(b.stake)} USDC, ${lineSentence(b.lockedZ, side, m.home, m.away).split(':')[0]}, ${b.claimed ? 'claimed' : 'not claimed'}`); continue }
+      if (compact) { out(`Bet ${b.id}: ${usd(b.stake)} USDC, ${lineSentence(b.lockedZ, side, m.home, m.away)}, ${b.claimed ? 'claimed' : 'not claimed'}`); continue }
       out(`- Bet ${b.id}: ${usd(b.stake)} USDC. ${lineSentence(b.lockedZ, side, m.home, m.away)}. ${b.claimed ? 'Claimed.' : 'Not claimed.'}`)
     }
     return 0
@@ -662,9 +706,10 @@ export function createCli(deps = {}) {
         }
         throw new UserError('A bet takes two steps: bet --prepare "<game>" <side> <stake>, then, after the user replies confirm, bet --confirm <intent-id>.')
       }
+      if (cmd === 'wallet') return await cmdWallet()
       if (cmd === 'status') return await cmdStatus(rest.join(' '))
       if (cmd === 'claim') return await cmdClaim(rest.join(' '))
-      throw new UserError('Commands: markets | odds "<game>" [--stake N] | bet --prepare "<game>" <side> <stake> | bet --confirm <id> | status "<game>" | claim "<game>"')
+      throw new UserError('Commands: wallet | markets | odds "<game>" [--stake N] | bet --prepare "<game>" <side> <stake> | bet --confirm <id> | status "<game>" | claim "<game>"')
     } catch (e) {
       if (e instanceof UserError) { out(e.message); return 1 }
       const msg = String(e?.shortMessage || e?.message || e).replace(/https?:\/\/\S+/g, '[url]')

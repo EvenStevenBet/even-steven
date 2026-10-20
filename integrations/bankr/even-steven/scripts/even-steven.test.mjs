@@ -11,9 +11,10 @@ import { fileURLToPath } from 'node:url'
 import { sentenceWins, contractWins } from './convention.mjs'
 
 // ES_MODULE=./even-steven.bundle.mjs runs the same tests against the single-file bundle.
-const { createCli, explainBetError, explainClaimError, parseStake, parseGameId, matchMarket, lineSentence, winThreshold,
+const { createCli, explainBetError, explainClaimError, parseStake, parseGameId, matchMarket, parseSide, lineSentence, winThreshold,
          deriveNonce, CLAIM_SENTENCE, FACTORY, USDC, MAGIC_1271, favoriteHeadline, formatSpread } = await import(process.env.ES_MODULE || './even-steven.mjs')
 
+const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`
 const KEY = 'bk_TEST_ONLY_skill_not_a_real_key_9876543210'
 const wallet = privateKeyToAccount(generatePrivateKey())
 const other = privateKeyToAccount(generatePrivateKey())
@@ -54,6 +55,7 @@ function chain(w) {
         case 'getMarketEV': return [args[0] * 3n / 2n, args[0] * 2n, w.fee]
         case 'getBetsByAddress': return (w.bets[String(address).toLowerCase()] || []).map((_, i) => BigInt(i))
         case 'getBet': return w.bets[String(address).toLowerCase()][Number(args[0])]
+        case 'balanceOf': return w.usdc ?? 1_000_000_000n
         case 'isValidSignature': return w.erc1271 ?? MAGIC_1271
         default: throw new Error('unmocked ' + functionName)
       }
@@ -504,20 +506,22 @@ test('status and claim by explicit address or full gameId do not depend on the r
 })
 
 // ---- compact mode ----
-test('--compact keeps the value order, stays short, and ends with "Reply confirm."', async () => {
+test('--compact keeps the value order, includes the win condition and the short wallet, and ends with "Reply confirm."', async () => {
   T = 1_800_000_000; const s = setup()
   assert.equal(await s.cli.run(['bet', '--prepare', 'Packers Cowboys', 'away', '10', '--compact']), 0)
   const lines = s.cli.lines
   assert.equal(lines.at(-1), 'Reply confirm.')
   const body = lines.slice(0, -1).join(' ')
-  assert.ok(body.length < 300, 'compact prepare is ' + body.length + ' chars')
+  assert.ok(body.length < 340, 'compact prepare is ' + body.length + ' chars')
   assert.ok(body.indexOf('Even money') < body.indexOf('Early line') && body.indexOf('Early line') < body.indexOf('Flat 2% fee'))
-  assert.match(body, /Cowboys -3\.5/); assert.match(body, /total 10\.20 USDC/)
-  assert.doesNotMatch(body, /profit|guarantee|\$100|builder|points/i)
+  assert.match(body, /Cowboys -3\.5: you win if the Cowboys win by 4 or more/)       // the win condition follows the pick
+  assert.ok(body.includes(short(wallet.address)), 'short wallet printed')
+  assert.match(body, /total 10\.20 USDC/); assert.doesNotMatch(body, /profit|guarantee|\$100|builder|points/i)
   const id = (/ID ([0-9a-f]{8})/.exec(body) || [])[1]
   assert.equal(await s.cli.run(['bet', '--confirm', id, '--compact']), 0, txt(s.cli))
-  assert.match(lines.at(-1), /^Bet placed: Cowboys -3\.5, locked\. 10\.00 USDC \+ 0\.20 fee\. https:\/\/basescan/)
-  assert.ok(lines.at(-1).length < 160)
+  const ok = lines.at(-1)
+  assert.match(ok, /^Bet placed: Cowboys -3\.5: you win if the Cowboys win by 4 or more\. Locked\. 10\.00 USDC \+ 0\.20 fee from 0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}\. https:\/\/basescan/)
+  assert.ok(ok.includes(short(wallet.address)))
 })
 test('--compact markets, odds and status are one line each', async () => {
   const s = setup(); await s.cli.run(['markets', '--compact'])
@@ -525,14 +529,35 @@ test('--compact markets, odds and status are one line each', async () => {
   assert.match(s.cli.lines[2], /^Packers v Cowboys: Cowboys favored by 3\.5, pools 30\.00\/10\.00 USDC, open \[NFL/)
   await s.cli.run(['odds', 'packers', '--compact']); assert.match(s.cli.lines.at(-1), /Payout is set at settlement\.$/)
 })
-test('BANKR_API_KEY env is used only when no config file exists', async () => {
-  const s = setup({ requireKey: true }); fs.rmSync(path.join(s.dir, 'config.json'))
-  const s2 = setup({}, { BANKR_API_KEY: KEY }); fs.rmSync(path.join(s2.dir, 'config.json'))
-  assert.equal(await s.cli.run(['status', 'Packers']), 1)                   // no file, no env, no proxy: clear error
-  const c = createCli({ env: { BANKR_CONFIG: path.join(s2.dir, 'nope.json'), BANKR_API_KEY: KEY, ES_STATE_DIR: path.join(s2.dir, 'st') }, now: () => T,
-    fetchImpl: async (url, init) => { s2.calls.push({ path: new URL(url).pathname, key: init.headers['X-API-Key'] }); return { status: 200, text: async () => JSON.stringify({ wallets: [{ chain: 'evm', address: wallet.address }] }) } },
-    publicClient: chain(s2.w), log: () => {} })
-  await c.run(['status', 'Packers']); assert.ok(s2.calls.some((x) => x.key === KEY)); assert.ok(!c.lines.join('\n').includes(KEY))
+test('key precedence: BANKR_API_KEY first, then the config file, then no header', async () => {
+  const hdr = async (envOver, withConfig) => {
+    const s = setup({}, envOver); if (!withConfig) fs.rmSync(path.join(s.dir, 'config.json'))
+    await s.cli.run(['wallet']); assert.ok(!txt(s.cli).includes(KEY)); return s.calls.find((c) => c.path === '/wallet/me').key
+  }
+  assert.equal(await hdr({ BANKR_API_KEY: 'bk_FROM_ENV_stand_in' }, true), 'bk_FROM_ENV_stand_in')   // env beats the config file
+  assert.equal(await hdr({}, true), KEY)                                                              // config file next
+  assert.equal(await hdr({ BANKR_API_KEY: 'bk_FROM_ENV_stand_in' }, false), 'bk_FROM_ENV_stand_in')   // env alone
+  assert.equal(await hdr({}, false), undefined)                                                       // nothing: no header at all
+})
+test('wallet: prints the address (full and short) and the USDC balance, read-only', async () => {
+  const s = setup({ world: { usdc: 12_340_000n } })
+  assert.equal(await s.cli.run(['wallet']), 0); assert.match(txt(s.cli), new RegExp(wallet.address)); assert.ok(txt(s.cli).includes(short(wallet.address))); assert.match(txt(s.cli), /USDC on Base: 12\.34/)
+  assert.equal(signCalls(s.calls).length, 0); assert.equal(betCalls(s.calls).length, 0)
+  const c = setup({ world: { usdc: 5_000_000n } }); await c.cli.run(['wallet', '--compact']); assert.equal(c.cli.lines.length, 1); assert.match(c.cli.lines[0], /: 5\.00 USDC on Base\.$/)
+})
+test('prepare refuses when the balance is under stake + fee (no intent written); confirm re-checks and never signs', async () => {
+  let s = setup({ world: { usdc: 10_199_999n } })
+  assert.equal(await s.cli.run(['bet', '--prepare', 'Packers Cowboys', 'away', '10']), 1)
+  assert.match(txt(s.cli), /needs 10\.20 USDC \(stake 10\.00 \+ fee 0\.20\) and wallet 0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4} holds 10\.20 USDC/.source ? /Not enough USDC.*needs 10\.20 USDC.*holds 10\.20/ : /x/)
+  assert.ok(!fs.existsSync(path.join(s.dir, 'state', 'intents')))
+  s = setup({ world: { usdc: 10_200_000n } }); const id = await prepared(s)          // exactly enough is fine
+  s.w.usdc = 1_000_000n                                                                // spent in the meantime
+  assert.equal(await s.cli.run(['bet', '--confirm', id]), 1); assert.match(txt(s.cli), /Not enough USDC/); assert.equal(signCalls(s.calls).length, 0)
+})
+test('prepare and confirm print the short wallet (normal mode)', async () => {
+  T = 1_800_000_000; const s = setup(); const id = await prepared(s)
+  assert.match(txt(s.cli), new RegExp('From wallet: ' + short(wallet.address)))
+  await s.cli.run(['bet', '--confirm', id]); assert.ok(s.cli.lines.at(-1).includes(short(wallet.address)) || s.cli.lines.some((l) => /from wallet 0x/.test(l) && l.includes(short(wallet.address))))
 })
 
 // ---- sign convention: the skill's words must agree with the contract rule ----
@@ -637,4 +662,86 @@ test('packaging: every file SKILL.md links to exists, the body points at the bun
   assert.ok(Buffer.byteLength(text) < 1_000_000)
   for (const f of fs.readdirSync(path.join(dir, 'references'))) assert.ok(fs.statSync(path.join(dir, 'references', f)).size < 100_000, f + ' over 100 KB')
   const bundle = fs.statSync(path.join(dir, 'scripts', 'even-steven.bundle.mjs')).size; assert.ok(bundle < 2 * 1024 * 1024, 'bundle over 2 MB: ' + bundle)
+})
+
+// ---- NFL and NBA aliases ----
+const { TEAMS, findTeamRefs } = await import(process.env.ES_TEAMS || './teams.mjs')
+const mkt = (sport, home, away, i) => ({ address: '0x' + String(i + 1).padStart(40, '0'), gameId: `${sport}-2026-11-0${(i % 9) + 1}-HOME-${home.replace(/ /g, '')}-AWAY-${away.replace(/ /g, '')}`, sport, home: home.replace(/ /g, ''), away: away.replace(/ /g, ''), date: '2026-11-01', z: 0n, gPool: 0n, lePool: 0n, tPool: 0n, isOpen: true, isSettled: false })
+test('aliases: there are 32 NFL and 30 NBA teams, each with a nickname, city and abbreviation', () => {
+  assert.equal(TEAMS.filter((t) => t.sport === 'NFL').length, 32); assert.equal(TEAMS.filter((t) => t.sport === 'NBA').length, 30)
+  for (const t of TEAMS) { assert.ok(t.cities.length && t.abbrs.length, t.nick) }
+})
+test('aliases: every team, by every alias, resolves to its own game (or asks, if the alias names several teams)', () => {
+  for (const sport of ['NFL', 'NBA']) {
+    const teams = TEAMS.filter((t) => t.sport === sport)
+    // a board with one game per team: team i at home against team i+1
+    const board = teams.map((t, i) => mkt(sport, t.nick, teams[(i + 1) % teams.length].nick, i))
+    for (const t of teams) {
+      const aliases = [t.nick, t.nick.toUpperCase(), ...t.alts, ...t.cities, ...t.abbrs, `${t.cities[0]} ${t.nick}`]
+      for (const alias of aliases) {
+        const r = matchMarket(alias, board)
+        const sharers = teams.filter((u) => [u.nick, ...u.alts, ...u.cities, ...u.abbrs].map((x) => x.toLowerCase()).includes(alias.toLowerCase()))
+        if (sharers.length > 1 && !(alias.toLowerCase() === t.nick.toLowerCase())) { assert.ok(r.ask, `${sport} ${t.nick} "${alias}" should ask`); continue }
+        // a unique alias names exactly this team; it sits in two games on the board (home in one, away in another), so it is "ambiguous" only between those games
+        const hits = r.match ? [r.match] : (r.ambiguous || [])
+        assert.ok(hits.length >= 1 && hits.every((m) => norm_(m.home) === norm_(t.nick) || norm_(m.away) === norm_(t.nick)), `${sport} ${t.nick} "${alias}" -> ask=${r.ask} match=${r.match?.gameId} amb=${(r.ambiguous || []).map((m) => m.gameId)} none=${r.none}`)
+      }
+    }
+  }
+})
+const norm_ = (x) => x.toLowerCase().replace(/[^a-z0-9]/g, '')
+test('aliases: two teams pick the single game between them, in any order and any alias', () => {
+  const board = [mkt('NFL', '49ers', 'Commanders', 0), mkt('NFL', 'Giants', 'Jets', 1), mkt('NFL', 'Rams', 'Chargers', 2), mkt('NFL', 'Packers', 'Cowboys', 3)]
+  for (const q of ['49ers Commanders', 'SF WSH', 'sf wsh', 'Niners Washington', 'San Francisco at Washington', 'WAS SF', 'Washington vs San Francisco', 'SF WAS', 'sf commanders', 'Commanders 49ers game']) {
+    assert.equal(matchMarket(q, board).match?.gameId, board[0].gameId, q)
+  }
+  assert.equal(matchMarket('Niners', board).match.gameId, board[0].gameId)
+  assert.equal(matchMarket('Washington', board).match.gameId, board[0].gameId)
+})
+test('aliases: names that fit several teams always ask, even when only one such game is on the board', () => {
+  const board = [mkt('NFL', '49ers', 'Commanders', 0), mkt('NFL', 'Giants', 'Cowboys', 1), mkt('NFL', 'Rams', 'Packers', 2)]
+  for (const q of ['New York', 'NY', 'ny', 'LA', 'la', 'Los Angeles']) {
+    const r = matchMarket(q, board); assert.ok(r.ask, q); assert.match(r.ask, /Ask the user which team/); assert.ok(!r.match && !r.ambiguous, q)
+  }
+  assert.match(matchMarket('New York', board).ask, /Giants or the Jets/); assert.match(matchMarket('LA', board).ask, /Chargers or the Rams|Rams or the Chargers/)
+  // another word that names one of the teams narrows it
+  assert.equal(matchMarket('New York Giants', board).match.gameId, board[1].gameId); assert.equal(matchMarket('NY Giants', board).match.gameId, board[1].gameId)
+  assert.equal(matchMarket('LA Rams', board).match.gameId, board[2].gameId); assert.equal(matchMarket('Los Angeles Rams', board).match.gameId, board[2].gameId)
+  assert.equal(matchMarket('NYG', board).match.gameId, board[1].gameId)
+  // with only one sport's games listed, a city shared with another sport is not ambiguous
+  assert.equal(matchMarket('Dallas', board).match.gameId, board[1].gameId)
+})
+test('aliases: with NFL and NBA games both open, a city shared across sports asks, and the nickname settles it', () => {
+  const board = [mkt('NFL', 'Eagles', 'Cowboys', 0), mkt('NBA', '76ers', 'Mavericks', 1), mkt('NBA', 'Lakers', 'Celtics', 2)]
+  assert.ok(matchMarket('Philadelphia', board).ask); assert.ok(matchMarket('Dallas', board).ask)
+  assert.equal(matchMarket('Eagles', board).match.gameId, board[0].gameId); assert.equal(matchMarket('Sixers', board).match.gameId, board[1].gameId)
+  assert.equal(matchMarket('Lakers Celtics', board).match.gameId, board[2].gameId); assert.equal(matchMarket('LAL BOS', board).match.gameId, board[2].gameId)
+  assert.equal(matchMarket('Boston', board).match.gameId, board[2].gameId)
+})
+test('aliases: abbreviations that are English words need capitals; ordinary words never match a team', () => {
+  const board = [mkt('NFL', 'Saints', 'Panthers', 0), mkt('NFL', 'Seahawks', 'Titans', 1)]
+  assert.equal(matchMarket('NO CAR', board).match.gameId, board[0].gameId); assert.equal(matchMarket('SEA TEN', board).match.gameId, board[1].gameId)
+  assert.deepEqual(matchMarket('no', board), { none: true })
+  assert.deepEqual(matchMarket('was the ten game', board), { none: true })
+  assert.deepEqual(matchMarket('cheesehead', board), { none: true })
+})
+test('aliases: an exact gameId or an address bypasses fuzzy matching entirely', () => {
+  const board = [mkt('NFL', 'Giants', 'Jets', 0), mkt('NFL', 'Giants', 'Cowboys', 1)]
+  assert.equal(matchMarket(board[1].gameId, board).match, board[1]); assert.equal(matchMarket(board[0].address, board).match, board[0])
+  assert.equal(matchMarket(board[0].address.toLowerCase(), board).match, board[0])
+  assert.ok(matchMarket('Giants', board).ambiguous)           // a nickname in two games is the usual ask-which-game path
+})
+test('aliases: sides by alias, and an ambiguous side asks', () => {
+  const m = { ...mkt('NFL', '49ers', 'Commanders', 0) }
+  assert.deepEqual(parseSide('SF', m), { greaterThan: true, side: 'home' }); assert.deepEqual(parseSide('Niners', m), { greaterThan: true, side: 'home' })
+  assert.deepEqual(parseSide('Washington', m), { greaterThan: false, side: 'away' }); assert.deepEqual(parseSide('WSH', m), { greaterThan: false, side: 'away' })
+  assert.deepEqual(parseSide('home', m), { greaterThan: true, side: 'home' })
+  assert.equal(parseSide('cheesehead', m), null)
+  const ny = { ...mkt('NFL', 'Giants', 'Jets', 1) }; assert.equal(parseSide('New York', ny), null); assert.deepEqual(parseSide('NYJ', ny), { greaterThan: false, side: 'away' })
+})
+test('aliases: the live flow asks on "New York" and resolves "SF WSH" end to end', async () => {
+  const w = { markets: { [MK1.toLowerCase()]: { gameId: 'NFL-2026-10-19-HOME-49ers-AWAY-Commanders', z: 35000n, g: 5_000_000n, le: 5_000_000n, open: true, settled: false },
+                         [MK2.toLowerCase()]: { gameId: 'NFL-2026-10-19-HOME-Giants-AWAY-Cowboys', z: 0n, g: 1_000_000n, le: 1_000_000n, open: true, settled: false } }, open: [MK1, MK2], all: [MK1, MK2] }
+  let s = setup({ world: w }); assert.equal(await s.cli.run(['bet', '--prepare', 'New York', 'home', '5']), 3); assert.match(txt(s.cli), /could be the Giants or the Jets/); assert.ok(!fs.existsSync(path.join(s.dir, 'state', 'intents')))
+  s = setup({ world: w }); assert.equal(await s.cli.run(['bet', '--prepare', 'SF vs WSH', 'Niners', '5']), 0, txt(s.cli)); assert.match(txt(s.cli), /49ers -3\.5: you win if the 49ers win by 4 or more/)
 })
