@@ -1,7 +1,7 @@
 # Even Steven skill for OpenClaw (ClawHub): draft, not published
 
-Drafted from the Bankr skill (`integrations/bankr/even-steven`). It runs the same single-file bundle, so both skills behave
-identically; only `SKILL.md` differs (ClawHub frontmatter, a human-approval section). Nothing here has been published.
+Drafted from the Bankr skill (`integrations/bankr/even-steven`). It runs the same code as the Bankr skill, built into its own single-file bundle by `npm run build`; only `SKILL.md` differs
+(ClawHub frontmatter, a human-approval section). Nothing here has been published.
 
 ## What it needs (declared in the frontmatter, which ClawHub checks against behavior)
 
@@ -27,9 +27,6 @@ clawhub skill publish integrations/openclaw/even-steven
 
 Things to know first: every skill on ClawHub is licensed MIT-0 (no per-skill license terms), the Acceptable Usage rules treat
 "spending tools without clear human approval" as disallowed (this skill has that approval step), and a publisher account is needed.
-One behavior is not declared in the frontmatter on purpose: the script also reads an `ES_REF` environment variable (unset by
-default), which this public draft does not document. If ClawHub's scan flags undeclared environment access, the options are to
-declare it or to build the OpenClaw bundle without it.
 
 ## Tests
 
