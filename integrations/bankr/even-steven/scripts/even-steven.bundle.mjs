@@ -19090,6 +19090,115 @@ import os from "node:os";
 import path from "node:path";
 import crypto3 from "node:crypto";
 import { pathToFileURL } from "node:url";
+
+// scripts/teams.mjs
+var T = [
+  ["NFL", "Cardinals", ["Arizona"], ["ARI"], ["Cards"]],
+  ["NFL", "Falcons", ["Atlanta"], ["ATL"], []],
+  ["NFL", "Ravens", ["Baltimore"], ["BAL", "BLT"], []],
+  ["NFL", "Bills", ["Buffalo"], ["BUF"], []],
+  ["NFL", "Panthers", ["Carolina"], ["CAR"], []],
+  ["NFL", "Bears", ["Chicago"], ["CHI"], []],
+  ["NFL", "Bengals", ["Cincinnati"], ["CIN"], []],
+  ["NFL", "Browns", ["Cleveland"], ["CLE"], []],
+  ["NFL", "Cowboys", ["Dallas"], ["DAL"], []],
+  ["NFL", "Broncos", ["Denver"], ["DEN"], []],
+  ["NFL", "Lions", ["Detroit"], ["DET"], []],
+  ["NFL", "Packers", ["Green Bay"], ["GB", "GNB"], []],
+  ["NFL", "Texans", ["Houston"], ["HOU"], []],
+  ["NFL", "Colts", ["Indianapolis"], ["IND"], []],
+  ["NFL", "Jaguars", ["Jacksonville"], ["JAX", "JAC"], ["Jags"]],
+  ["NFL", "Chiefs", ["Kansas City"], ["KC", "KAN"], []],
+  ["NFL", "Raiders", ["Las Vegas"], ["LV", "LVR", "OAK"], []],
+  ["NFL", "Chargers", ["Los Angeles", "LA"], ["LAC"], []],
+  ["NFL", "Rams", ["Los Angeles", "LA"], ["LAR"], []],
+  ["NFL", "Dolphins", ["Miami"], ["MIA"], ["Fins", "Phins"]],
+  ["NFL", "Vikings", ["Minnesota"], ["MIN"], []],
+  ["NFL", "Patriots", ["New England"], ["NE", "NWE"], ["Pats"]],
+  ["NFL", "Saints", ["New Orleans"], ["NO", "NOR", "NOLA"], []],
+  ["NFL", "Giants", ["New York", "NY"], ["NYG"], ["Big Blue"]],
+  ["NFL", "Jets", ["New York", "NY"], ["NYJ"], []],
+  ["NFL", "Eagles", ["Philadelphia"], ["PHI"], []],
+  ["NFL", "Steelers", ["Pittsburgh"], ["PIT"], []],
+  ["NFL", "49ers", ["San Francisco"], ["SF", "SFO"], ["Niners"]],
+  ["NFL", "Seahawks", ["Seattle"], ["SEA"], []],
+  ["NFL", "Buccaneers", ["Tampa Bay", "Tampa"], ["TB", "TAM"], ["Bucs"]],
+  ["NFL", "Titans", ["Tennessee"], ["TEN"], []],
+  ["NFL", "Commanders", ["Washington"], ["WAS", "WSH", "WFT"], []],
+  ["NBA", "Hawks", ["Atlanta"], ["ATL"], []],
+  ["NBA", "Celtics", ["Boston"], ["BOS"], []],
+  ["NBA", "Nets", ["Brooklyn"], ["BKN", "BRK"], []],
+  ["NBA", "Hornets", ["Charlotte"], ["CHA", "CHO"], []],
+  ["NBA", "Bulls", ["Chicago"], ["CHI"], []],
+  ["NBA", "Cavaliers", ["Cleveland"], ["CLE"], ["Cavs"]],
+  ["NBA", "Mavericks", ["Dallas"], ["DAL"], ["Mavs"]],
+  ["NBA", "Nuggets", ["Denver"], ["DEN"], []],
+  ["NBA", "Pistons", ["Detroit"], ["DET"], []],
+  ["NBA", "Warriors", ["Golden State"], ["GS", "GSW"], ["Dubs"]],
+  ["NBA", "Rockets", ["Houston"], ["HOU"], []],
+  ["NBA", "Pacers", ["Indiana"], ["IND"], []],
+  ["NBA", "Clippers", ["Los Angeles", "LA"], ["LAC"], []],
+  ["NBA", "Lakers", ["Los Angeles", "LA"], ["LAL"], []],
+  ["NBA", "Grizzlies", ["Memphis"], ["MEM"], []],
+  ["NBA", "Heat", ["Miami"], ["MIA"], []],
+  ["NBA", "Bucks", ["Milwaukee"], ["MIL"], []],
+  ["NBA", "Timberwolves", ["Minnesota"], ["MIN"], ["Wolves", "T-Wolves"]],
+  ["NBA", "Pelicans", ["New Orleans"], ["NO", "NOP"], ["Pels"]],
+  ["NBA", "Knicks", ["New York", "NY"], ["NYK"], []],
+  ["NBA", "Thunder", ["Oklahoma City"], ["OKC"], []],
+  ["NBA", "Magic", ["Orlando"], ["ORL"], []],
+  ["NBA", "76ers", ["Philadelphia"], ["PHI", "PHL"], ["Sixers"]],
+  ["NBA", "Suns", ["Phoenix"], ["PHX", "PHO"], []],
+  ["NBA", "Trail Blazers", ["Portland"], ["POR"], ["Blazers"]],
+  ["NBA", "Kings", ["Sacramento"], ["SAC"], []],
+  ["NBA", "Spurs", ["San Antonio"], ["SA", "SAS"], []],
+  ["NBA", "Raptors", ["Toronto"], ["TOR"], []],
+  ["NBA", "Jazz", ["Utah"], ["UTA"], []],
+  ["NBA", "Wizards", ["Washington"], ["WAS", "WSH"], []]
+];
+var WORDS = /* @__PURE__ */ new Set(["no", "was", "car", "ten", "den", "pit", "min", "ind", "sea", "det"]);
+var TEAMS = T.map(([sport, nick, cities, abbrs, alts]) => ({ sport, nick, key: nick.toLowerCase().replace(/[^a-z0-9]/g, ""), cities, abbrs, alts }));
+var clean2 = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+var PHRASES = /* @__PURE__ */ new Map();
+var add = (phrase, team, kind) => {
+  const k = clean2(phrase);
+  if (!PHRASES.has(k)) PHRASES.set(k, []);
+  PHRASES.get(k).push({ team, kind });
+};
+for (const t of TEAMS) {
+  add(t.nick, t, "nick");
+  for (const a of t.alts) add(a, t, "nick");
+  for (const c of t.cities) add(c, t, "city");
+  for (const a of t.abbrs) add(a, t, "abbr");
+}
+var MAX_WORDS = Math.max(...[...PHRASES.keys()].map((k) => k.split(" ").length));
+function findTeamRefs(text, sports) {
+  const orig = String(text).replace(/[^A-Za-z0-9'\- ]+/g, " ").split(/\s+/).filter(Boolean);
+  const toks = orig.map((t) => clean2(t));
+  const refs = [], rest = [];
+  let i = 0;
+  while (i < toks.length) {
+    let hit = null;
+    for (let n = Math.min(MAX_WORDS, toks.length - i); n >= 1 && !hit; n--) {
+      const phrase = toks.slice(i, i + n).join(" ");
+      const entries = PHRASES.get(phrase);
+      if (!entries) continue;
+      if (n === 1 && entries.every((e) => e.kind === "abbr") && WORDS.has(phrase) && orig[i] !== orig[i].toUpperCase()) continue;
+      const teams = entries.filter((e) => !sports || sports.has(e.team.sport)).map((e) => e.team);
+      if (teams.length) hit = { n, phrase, teams: [...new Set(teams)] };
+    }
+    if (hit) {
+      refs.push({ phrase: orig.slice(i, i + hit.n).join(" "), teams: hit.teams });
+      i += hit.n;
+    } else {
+      rest.push(toks[i]);
+      i++;
+    }
+  }
+  return { refs, rest };
+}
+
+// scripts/even-steven.mjs
 var FACTORY = "0x5906370b9831728ec523b647137a1bbf0ab45390";
 var USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 var API_BASE = "https://evensteven.bet";
@@ -19126,8 +19235,10 @@ var MARKET_ABI = parseAbi([
   "function getBetsByAddress(address) view returns (uint256[])",
   "function getBet(uint256) view returns ((address bettor, uint256 stake, bool greaterThan, int256 lockedZ, bool claimed))"
 ]);
+var ERC20_ABI = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 var ERC1271_ABI = parseAbi(["function isValidSignature(bytes32,bytes) view returns (bytes4)"]);
 var usd = (n) => Number(formatUnits(BigInt(n), 6)).toFixed(2);
+var shortAddr = (a) => `${String(a).slice(0, 6)}\u2026${String(a).slice(-4)}`;
 var norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 function parseStake(text, maxStakeUsdc = DEFAULT_MAX_STAKE) {
   if (!/^\d+(\.\d{1,6})?$/.test(String(text))) throw new UserError(`"${text}" is not a USDC amount. Use a number like 5 or 12.50.`);
@@ -19203,6 +19314,21 @@ function matchMarket(query, markets) {
   }
   const exact = markets.filter((m) => m.gameId.toLowerCase() === q.toLowerCase());
   if (exact.length === 1) return { match: exact[0] };
+  const sports = new Set(markets.map((m) => m.sport).filter(Boolean));
+  const { refs, rest } = findTeamRefs(q, sports.size ? sports : void 0);
+  if (refs.length) {
+    const named = new Set(refs.filter((r) => r.teams.length === 1).map((r) => r.teams[0]));
+    const open = refs.find((r) => r.teams.length > 1 && !r.teams.some((t) => named.has(t)));
+    if (open) return { ask: `"${open.phrase}" could be the ${open.teams.map((t) => t.nick).join(" or the ")}. Ask the user which team.` };
+    const need = [...named];
+    const extra = rest.filter((t) => t.length >= 2 && !STOP.has(t));
+    const hits2 = markets.filter((m) => {
+      const teams = [norm(m.home), norm(m.away)], g = norm(m.gameId);
+      return need.every((t) => teams.includes(t.key) && (!m.sport || m.sport === t.sport)) && extra.every((t) => g.includes(t.replace(/[^a-z0-9]/g, "")));
+    });
+    if (hits2.length === 1) return { match: hits2[0] };
+    return hits2.length ? { ambiguous: hits2 } : { none: true };
+  }
   const tokens = q.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2 && !STOP.has(t));
   if (!tokens.length) return { none: true };
   const hits = markets.filter((m) => {
@@ -19217,6 +19343,16 @@ function parseSide(text, market) {
   if (t === "home") return { greaterThan: true, side: "home" };
   if (t === "away") return { greaterThan: false, side: "away" };
   const h = norm(market.home), a = norm(market.away);
+  const { refs } = findTeamRefs(text, market.sport ? /* @__PURE__ */ new Set([market.sport]) : void 0);
+  if (refs.length) {
+    const sides = /* @__PURE__ */ new Set();
+    for (const r of refs) for (const tm of r.teams) {
+      if (tm.key === h) sides.add("home");
+      if (tm.key === a) sides.add("away");
+    }
+    if (sides.size === 1) return sides.has("home") ? { greaterThan: true, side: "home" } : { greaterThan: false, side: "away" };
+    if (sides.size === 2) return null;
+  }
   const isH = t.length >= 2 && (h.includes(t) || t.includes(h)), isA = t.length >= 2 && (a.includes(t) || t.includes(a));
   if (isH && !isA) return { greaterThan: true, side: "home" };
   if (isA && !isH) return { greaterThan: false, side: "away" };
@@ -19308,12 +19444,12 @@ function createCli(deps = {}) {
   };
   function loadKey() {
     if (apiKey !== null) return apiKey || null;
-    if (fs.existsSync(configPath)) {
+    if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY;
+    else if (fs.existsSync(configPath)) {
       const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
       apiKey = cfg.apiKey || cfg.api_key || "";
       if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`);
-    } else if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY;
-    else apiKey = "";
+    } else apiKey = "";
     return apiKey || null;
   }
   async function call2(base_, method, p, body) {
@@ -19361,6 +19497,10 @@ function createCli(deps = {}) {
       out(r.error);
       return { code: 1 };
     }
+    if (r.ask) {
+      out(r.ask);
+      return { code: 3 };
+    }
     if (r.none) {
       out(`No ${open ? "open " : ""}market matches "${game}". Run the markets command${open ? " to see what is open" : ""}.`);
       return { code: 3 };
@@ -19387,11 +19527,19 @@ function createCli(deps = {}) {
     const gid = await pc.readContract({ address: factory, abi: FACTORY_ABI, functionName: "gameIdByMarket", args: [addr] });
     return !!gid;
   }
+  const usdcBalance = (who) => pc.readContract({ address: USDC, abi: ERC20_ABI, functionName: "balanceOf", args: [who] });
   const readFee = (addr) => pc.readContract({ address: addr, abi: MARKET_ABI, functionName: "FEE_PERCENT" });
   async function betsOf(market, wallet) {
     const ids = await pc.readContract({ address: market, abi: MARKET_ABI, functionName: "getBetsByAddress", args: [wallet] });
     const bets = await Promise.all(ids.map((id) => pc.readContract({ address: market, abi: MARKET_ABI, functionName: "getBet", args: [id] }).then((b) => ({ id, ...b }))));
     return bets;
+  }
+  async function cmdWallet() {
+    const w = await getWallet();
+    const bal = await usdcBalance(w);
+    out(compact ? `Wallet ${shortAddr(w)} (${w}): ${usd(bal)} USDC on Base.` : `Bankr wallet: ${w} (${shortAddr(w)})
+USDC on Base: ${usd(bal)}`);
+    return 0;
   }
   async function cmdMarkets(all = false) {
     const ms = await listMarkets(pc, all ? "all" : "open", factory);
@@ -19455,6 +19603,11 @@ function createCli(deps = {}) {
     const feeBps = await readFee(m.address);
     const fee = stake * feeBps / 10000n;
     const total = stake + fee;
+    const have = await usdcBalance(wallet);
+    if (have < total) {
+      out(`Not enough USDC. This bet needs ${usd(total)} USDC (stake ${usd(stake)} + fee ${usd(fee)}) and wallet ${shortAddr(wallet)} holds ${usd(have)} USDC on Base. Nothing was prepared.`);
+      return 1;
+    }
     const id = randomId();
     const t = now();
     saveIntent({
@@ -19474,12 +19627,13 @@ function createCli(deps = {}) {
     });
     const pct = Number(feeBps) / 100;
     if (compact) {
-      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away).split(":")[0]} (${m.home} v ${m.away}). Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`);
+      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away)} (${m.home} v ${m.away}), from ${shortAddr(wallet)}. Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`);
       out("Reply confirm.");
       return 0;
     }
     out("Confirm this bet?");
     out(`Game: ${marketBlurb(m)}`);
+    out(`From wallet: ${shortAddr(wallet)}`);
     out(`Your pick: ${lineSentence(m.z, s.side, m.home, m.away)}`);
     out("1. Even money: back either side at even money. The spread moves to balance the pool, and a balanced pool pays even money. Your payout is set at settlement from the final pool.");
     out(`2. The early line: this line locks when your bet lands and never changes. Later bets move the line for later bettors. Current line: ${favoriteHeadline(m.z, m.home, m.away)}.`);
@@ -19545,12 +19699,12 @@ function createCli(deps = {}) {
     const z = BigInt(body.lockedZ ?? "0");
     const mk = m ?? parseGameId(intent.gameId);
     if (compact) {
-      out(`Bet placed: ${lineSentence(z, intent.side, mk.home, mk.away).split(":")[0]}, locked. ${usd(intent.stake)} USDC + ${usd(body.fee ?? intent.fee)} fee. ${BASESCAN}/tx/${body.txHash}`);
+      out(`Bet placed: ${lineSentence(z, intent.side, mk.home, mk.away)}. Locked. ${usd(intent.stake)} USDC + ${usd(body.fee ?? intent.fee)} fee from ${shortAddr(intent.wallet)}. ${BASESCAN}/tx/${body.txHash}`);
       return;
     }
     out(`Bet placed. ${lineSentence(z, intent.side, mk.home, mk.away)}`);
     out(`Your line locked at ${body.lockedZDisplay ?? Number(z) / 1e4} and does not change; later bets move the line for later bettors.`);
-    out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC. Your payout is set at settlement from the final pool.`);
+    out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC, from wallet ${shortAddr(intent.wallet)}. Your payout is set at settlement from the final pool.`);
     out(`Bet id ${body.betId}. Transaction: ${BASESCAN}/tx/${body.txHash}`);
   }
   const relayPayload = (i) => i.payload;
@@ -19693,6 +19847,12 @@ function createCli(deps = {}) {
         return 1;
       }
       const stake = BigInt(intent.stake), fee = BigInt(intent.fee);
+      const have = await usdcBalance(wallet);
+      if (have < stake + fee) {
+        release(intent, "failed");
+        out(`Not enough USDC: this bet needs ${usd(stake + fee)} and wallet ${shortAddr(wallet)} holds ${usd(have)}. Nothing was signed. Fund the wallet and prepare again.`);
+        return 1;
+      }
       const salt = randomSalt();
       const td = buildAuthorization({ wallet, market, stake, fee, greaterThan: intent.greaterThan, salt, t });
       await preSignChecks({ td, wallet, stake, greaterThan: intent.greaterThan, salt, t });
@@ -19796,7 +19956,7 @@ function createCli(deps = {}) {
     for (const b of bets) {
       const side = b.greaterThan ? "home" : "away";
       if (compact) {
-        out(`Bet ${b.id}: ${usd(b.stake)} USDC, ${lineSentence(b.lockedZ, side, m.home, m.away).split(":")[0]}, ${b.claimed ? "claimed" : "not claimed"}`);
+        out(`Bet ${b.id}: ${usd(b.stake)} USDC, ${lineSentence(b.lockedZ, side, m.home, m.away)}, ${b.claimed ? "claimed" : "not claimed"}`);
         continue;
       }
       out(`- Bet ${b.id}: ${usd(b.stake)} USDC. ${lineSentence(b.lockedZ, side, m.home, m.away)}. ${b.claimed ? "Claimed." : "Not claimed."}`);
@@ -19854,9 +20014,10 @@ function createCli(deps = {}) {
         }
         throw new UserError('A bet takes two steps: bet --prepare "<game>" <side> <stake>, then, after the user replies confirm, bet --confirm <intent-id>.');
       }
+      if (cmd === "wallet") return await cmdWallet();
       if (cmd === "status") return await cmdStatus(rest.join(" "));
       if (cmd === "claim") return await cmdClaim(rest.join(" "));
-      throw new UserError('Commands: markets | odds "<game>" [--stake N] | bet --prepare "<game>" <side> <stake> | bet --confirm <id> | status "<game>" | claim "<game>"');
+      throw new UserError('Commands: wallet | markets | odds "<game>" [--stake N] | bet --prepare "<game>" <side> <stake> | bet --confirm <id> | status "<game>" | claim "<game>"');
     } catch (e) {
       if (e instanceof UserError) {
         out(e.message);
@@ -19908,5 +20069,6 @@ export {
   parseGameId,
   parseSide,
   parseStake,
+  shortAddr,
   winThreshold
 };

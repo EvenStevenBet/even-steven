@@ -10,6 +10,7 @@ const publicClient = {
     if (functionName === 'FEE_PERCENT') return 200n
     if (functionName === 'gameIdByMarket') return GAME
     if (functionName === 'getBetsByAddress') return []
+    if (functionName === 'balanceOf') return 1_000_000_000n
     throw new Error('unmocked ' + functionName)
   },
 }

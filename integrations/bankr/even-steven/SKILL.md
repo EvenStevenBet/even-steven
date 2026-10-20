@@ -35,7 +35,7 @@ Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are 
 2. Fund the Bankr wallet with USDC on Base. No ETH is needed to bet: the relay pays the gas.
 3. Nothing to install. `scripts/even-steven.bundle.mjs` is a single file with its one dependency built in, and needs only Node 20 or newer.
 
-The script finds the Bankr key in this order: `~/.bankr/config.json` (or `$BANKR_CONFIG`), then the `BANKR_API_KEY` environment variable (a real key or a host stand-in), then nothing. With nothing, it sends no key header at all, because a sandboxed host may attach the credential on the network. Never ask the user to paste a key into chat.
+The script finds the Bankr key in this order: the `BANKR_API_KEY` environment variable (a real key or a host stand-in), then `~/.bankr/config.json` (or `$BANKR_CONFIG`), then nothing. With nothing, it sends no key header at all, because a sandboxed host may attach the credential on the network. Never ask the user to paste a key into chat.
 
 ## Commands
 
@@ -43,6 +43,7 @@ All commands are `node scripts/even-steven.bundle.mjs <command>`.
 
 | Command | What it does |
 |---|---|
+| `wallet` | The Bankr wallet address and its USDC balance on Base. Read only. |
 | `markets [--all]` | Open games from the Even Steven factory: teams, the line, the pools, whether betting is open. `--all` includes recent closed games. Free chain reads. |
 | `odds "<game>" [--stake N] [--all]` | The line and the contract's own quote for both sides at a stake (default 10 USDC). Free chain reads. |
 | `bet --prepare "<game>" <side> <stake>` | Resolves the game and side, reads the fee from the market, prints the confirmation text, and saves a pending bet that expires in 5 minutes. Nothing is signed. |
@@ -50,9 +51,11 @@ All commands are `node scripts/even-steven.bundle.mjs <command>`.
 | `status "<game>"` | Your bets on a game and their locked lines, read from the chain. |
 | `claim "<game>"` | Collects what you are owed on a game through the relay. |
 
-Add `--compact` to any command for short, single-line replies (the value order and "Reply confirm." are kept). Use it on surfaces with tight length limits.
+Add `--compact` to any command for short replies (the value order, the win condition after the pick, the short wallet and "Reply confirm." are kept). Use it on surfaces with tight length limits.
 
-`<game>` is a gameId, a market address, or team names ("Packers Cowboys"). `<side>` is `home`, `away`, or a team name of that game. Quote the game and the team words.
+Prepare and confirm always show the wallet in short form (for example `0x1234…abcd`). Prepare refuses, and writes nothing, if the wallet holds less than stake plus fee.
+
+`<game>` is a gameId, a market address, or team names for NFL and NBA games: nicknames, cities and abbreviations all work ("SF WSH", "Niners Washington", "Lakers Celtics"). A name that fits several teams ("New York", "LA") always asks which team; never guess. `<side>` is `home`, `away`, or a team name of that game. Quote the game and the team words.
 
 ## Placing a bet
 
