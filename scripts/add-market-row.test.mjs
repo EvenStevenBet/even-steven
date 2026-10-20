@@ -2,7 +2,12 @@
 // Synthetic fixtures only: invented 2031 matchups, not real schedule data.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HEADER, buildRow, canonicalTeam, easternDate, insertRow, parseEastern, parseUtc } from './add-market-row.mjs'
+import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { HEADER, HELP, TEAMS, buildRow, canonicalTeam, easternDate, insertRow, parseEastern, parseUtc } from './add-market-row.mjs'
 
 const NOW = Date.parse('2030-06-01T00:00:00Z')
 const CSV = HEADER + '\n'
@@ -90,4 +95,26 @@ test('insertRow goes after the last data row and keeps trailing blank rows and l
   assert.equal(insertRow(text, 'NEW'), [HEADER, 'r1,,,,,,,,,,', 'r2,,,,,,,,,,', 'NEW', '', '', ''].join('\n'))
   assert.equal(insertRow(HEADER + '\n', 'NEW'), HEADER + '\nNEW\n')
   assert.equal(insertRow(HEADER, 'NEW'), HEADER + '\nNEW')
+})
+
+// Drift guard: TEAMS is a copy of the nickname column of teams.mjs on the Bankr branch. Reads it with git, so it
+// is skipped (loudly) where that ref is not available, e.g. a shallow CI checkout.
+test('TEAMS matches the nicknames in teams.mjs on the Bankr branch', (t) => {
+  const path = 'integrations/bankr/even-steven/scripts/teams.mjs'
+  const src = ['integrations/bankr-skill', 'origin/integrations/bankr-skill'].map((ref) => {
+    try { return execFileSync('git', ['show', `${ref}:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null }
+  }).find(Boolean)
+  if (!src) return t.skip('integrations/bankr-skill is not available in this checkout')
+  const dir = fs.mkdtempSync(join(tmpdir(), 'teams-'))
+  fs.writeFileSync(join(dir, 'teams.mjs'), src)
+  return import(pathToFileURL(join(dir, 'teams.mjs')).href).then(({ TEAMS: theirs }) => {
+    for (const sport of Object.keys(TEAMS)) {
+      assert.deepEqual([...TEAMS[sport]].sort(), theirs.filter((x) => x.sport === sport).map((x) => x.nick).sort(), sport)
+    }
+    assert.deepEqual(Object.keys(TEAMS).sort(), [...new Set(theirs.map((x) => x.sport))].sort())
+  })
+})
+
+test('help text warns that unapproved rows are public', () => {
+  assert.match(HELP, /coming soon.*whether or not it is approved/s)
 })

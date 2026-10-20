@@ -7,6 +7,9 @@
 //   node scripts/add-market-row.mjs --sport NBA --home "Trail Blazers" --away Jazz --et "2031-01-06 22:00"
 //   options: --notes "<text>"   --file <path> (default data/markets.csv)   --write
 //
+// IMPORTANT: every row in data/markets.csv appears on the live site as a "coming soon" card, approved or
+// not (the site reads this file straight from main). Add rows only a day or two before the game.
+//
 // What it fills in:
 //   gameId          SPORT-YYYY-MM-DD-HOME-<Home>-AWAY-<Away>, dated by the US Eastern calendar date of
 //                   tip-off; spaces in a nickname become hyphens (the site's parseGameId turns them back)
@@ -31,6 +34,8 @@ const DEFAULT_FILE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 // Nicknames exactly as integrations/bankr/even-steven/scripts/teams.mjs spells them (the alias table the
 // Bankr skill matches gameIds against). Aliases like "Sixers" or "Blazers" are deliberately not accepted.
+// DRIFT RISK: this is a copy. add-market-row.test.mjs compares it with teams.mjs on the Bankr branch
+// (integrations/bankr-skill) and fails if they differ; if teams.mjs changes, update this list to match.
 export const TEAMS = {
   NBA: ['Hawks', 'Celtics', 'Nets', 'Hornets', 'Bulls', 'Cavaliers', 'Mavericks', 'Nuggets', 'Pistons', 'Warriors',
     'Rockets', 'Pacers', 'Clippers', 'Lakers', 'Grizzlies', 'Heat', 'Bucks', 'Timberwolves', 'Pelicans', 'Knicks',
@@ -158,7 +163,15 @@ function parseArgs(argv) {
   return out
 }
 
+export const HELP = `Build one validated data/markets.csv row. Prints it; with --write appends it to the local file. Never commits or pushes.
+
+  node scripts/add-market-row.mjs --sport NBA --home <nickname> --away <nickname> (--utc <ISO with Z> | --et "YYYY-MM-DD HH:MM") [--notes "<text>"] [--file <path>] [--write]
+
+NOTE: every row added to data/markets.csv shows up on the live site as a "coming soon" card as soon as it is on main,
+whether or not it is approved. Add rows only a day or two before the game.`
+
 function main() {
+  if (process.argv.length <= 2 || process.argv.includes('--help') || process.argv.includes('-h')) { console.log(HELP); return }
   const args = parseArgs(process.argv.slice(2))
   const file = path.resolve(args.file ?? DEFAULT_FILE)
   const text = fs.readFileSync(file, 'utf8')
