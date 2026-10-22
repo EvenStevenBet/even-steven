@@ -17,7 +17,7 @@ test('frontmatter follows the ClawHub skill format', () => {
   assert.equal(fm.name, path.basename(dir)); assert.match(fm.name, /^[a-z0-9-]{1,64}$/)
   assert.match(fm.version, /^\d+\.\d+\.\d+$/); assert.ok(typeof fm.description === 'string' && fm.description.length > 80)
   const oc = fm.metadata.openclaw
-  assert.deepEqual(oc.requires.bins, ['node']); assert.deepEqual(oc.requires.config, ['~/.bankr/config.json'])
+  assert.deepEqual(oc.requires.bins, ['node']); assert.equal(oc.requires.config, undefined)
   assert.equal(oc.homepage, 'https://evensteven.bet'); assert.equal(oc.primaryEnv, 'BANKR_API_KEY')
   for (const v of oc.envVars) { assert.match(v.name, /^[A-Z][A-Z0-9_]*$/); assert.equal(v.required, false); assert.ok(v.description.length > 10) }
   assert.equal(oc.requires.env, undefined, 'optional variables belong in envVars, not requires.env')
