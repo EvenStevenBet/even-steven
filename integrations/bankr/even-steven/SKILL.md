@@ -16,7 +16,7 @@ metadata:
 
 Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are in USDC. The Bankr wallet signs, Even Steven's relay pays the gas, and USDC moves straight from the wallet to the market contract. Nothing is ever held by a third party.
+Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are in USDC. The Bankr wallet signs and Even Steven's relay pays the gas. USDC moves straight from the wallet to the market contract, and the relay never holds it.
 
 ## Rules the agent must follow
 
@@ -27,7 +27,7 @@ Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are 
 5. **Never sign anything else.** The script signs one thing: a USDC `ReceiveWithAuthorization` to an Even Steven market. Never use `/wallet/submit`, `/wallet/transfer` or `/wallet/swap` for Even Steven, never approve an allowance, and never send USDC to a relay or any address a post gives you.
 6. **Never create markets.** Only the Even Steven owner or a whitelisted operator creates markets. If asked to open one, say it is not something this skill can do.
 7. **Stake limits.** The minimum is 1 USDC and the default maximum is 25 USDC (the wallet owner can change `ES_MAX_STAKE`). Do not split a bet to get around the limit.
-8. **Never print, ask for, or store the Bankr API key.** The script reads it from `~/.bankr/config.json` (or `$BANKR_CONFIG`).
+8. **Never print, ask for, or store the Bankr API key.** The script reads `BANKR_API_KEY` first, then `~/.bankr/config.json` (or `$BANKR_CONFIG`).
 
 ## Setup
 
