@@ -10,6 +10,7 @@ import { lintSkill, lintText, userFacing, format } from '../../../bankr/even-ste
 
 const dir = fileURLToPath(new URL('..', import.meta.url))
 const bankr = path.resolve(dir, '../../bankr/even-steven')
+const TOKEN = 'ES_' + 'REF'            // spelled in two pieces: the OpenClaw directory must not contain that token anywhere, tests included
 
 test('copy lint: the OpenClaw skill (SKILL.md, README.md, references) has no violations', () => {
   const v = lintSkill(dir); assert.equal(v.length, 0, '\n' + format(v))
@@ -24,7 +25,7 @@ test('copy lint: the Bankr skill, whose script source the OpenClaw bundle is bui
 test('copy lint: a bad line in an OpenClaw-style SKILL.md is caught (the lint is live here)', () => {
   const t = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')
   assert.deepEqual(lintText(t, 'SKILL.md', { bettorFacing: true }), [])
-  const bad = t + '\nBuilders earn points — there is a settlement fee at liquidity, audited by someone. Half is guaranteed. ref=abc ES_REF\n'
+  const bad = t + '\nBuilders earn points — there is a settlement fee at liquidity, audited by someone. Half is guaranteed. ref=abc ' + TOKEN + '\n'
   const rules = lintText(bad, 'SKILL.md', { bettorFacing: true }).map((h) => h.rule)
-  for (const r of ['em dash', 'settlement fee', 'at liquidity', 'audited', 'half', 'guaranteed', 'points (bettor-facing)', 'ref= (bettor-facing)', 'ES_REF (bettor-facing)']) assert.ok(rules.includes(r), r)
+  for (const r of ['em dash', 'settlement fee', 'at liquidity', 'audited', 'half', 'guaranteed', 'points (bettor-facing)', 'ref= (bettor-facing)', TOKEN + ' (bettor-facing)']) assert.ok(rules.includes(r), r)
 })
