@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { HEADER, HELP, TEAMS, buildRow, canonicalTeam, easternDate, insertRow, parseEastern, parseUtc } from './add-market-row.mjs'
 
 const NOW = Date.parse('2030-06-01T00:00:00Z')
@@ -97,16 +97,42 @@ test('insertRow goes after the last data row and keeps trailing blank rows and l
   assert.equal(insertRow(HEADER, 'NEW'), HEADER + '\nNEW')
 })
 
-// Drift guard: TEAMS is a copy of the nickname column of teams.mjs on the Bankr branch. Reads it with git, so it
-// is skipped (loudly) where that ref is not available, e.g. a shallow CI checkout.
-test('TEAMS matches the nicknames in teams.mjs on the Bankr branch', (t) => {
-  const path = 'integrations/bankr/even-steven/scripts/teams.mjs'
-  const src = ['integrations/bankr-skill', 'origin/integrations/bankr-skill'].map((ref) => {
-    try { return execFileSync('git', ['show', `${ref}:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }) } catch { return null }
-  }).find(Boolean)
-  if (!src) return t.skip('integrations/bankr-skill is not available in this checkout')
+// Drift guard: TEAMS is a copy of the nickname column of teams.mjs in the Bankr skill. The test reads that file from the
+// working tree when it is there (any branch or checkout that has integrations/bankr), and only falls back to a git ref
+// (integrations/bankr-skill) when it is not. If neither is available the test is skipped, loudly.
+const TEAMS_PATH = 'integrations/bankr/even-steven/scripts/teams.mjs'
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+const gitShow = (ref, path) => execFileSync('git', ['show', `${ref}:${path}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+export function readTeamsSource(root = REPO_ROOT, show = gitShow) {
+  const file = join(root, TEAMS_PATH)
+  if (fs.existsSync(file)) return { src: fs.readFileSync(file, 'utf8'), from: `working tree (${TEAMS_PATH})` }
+  for (const ref of ['integrations/bankr-skill', 'origin/integrations/bankr-skill']) {
+    try { return { src: show(ref, TEAMS_PATH), from: `git ref ${ref}` } } catch { /* try the next ref */ }
+  }
+  return null
+}
+
+test('teams.mjs is read from the working tree when it exists, and from git only otherwise', () => {
+  const withFile = fs.mkdtempSync(join(tmpdir(), 'wt-'))
+  fs.mkdirSync(join(withFile, 'integrations/bankr/even-steven/scripts'), { recursive: true })
+  fs.writeFileSync(join(withFile, TEAMS_PATH), 'export const TEAMS = []')
+  const noGit = () => { throw new Error('git must not be consulted when the working-tree file exists') }
+  assert.deepEqual(readTeamsSource(withFile, noGit), { src: 'export const TEAMS = []', from: `working tree (${TEAMS_PATH})` })
+
+  const without = fs.mkdtempSync(join(tmpdir(), 'nowt-'))
+  const asked = []
+  const fake = (ref) => { asked.push(ref); if (ref === 'integrations/bankr-skill') throw new Error('no such ref'); return 'export const TEAMS = [1]' }
+  assert.deepEqual(readTeamsSource(without, fake), { src: 'export const TEAMS = [1]', from: 'git ref origin/integrations/bankr-skill' })
+  assert.deepEqual(asked, ['integrations/bankr-skill', 'origin/integrations/bankr-skill'], 'refs are tried in order')
+  assert.equal(readTeamsSource(without, () => { throw new Error('nope') }), null)
+})
+
+test('TEAMS matches the nicknames in the Bankr skill teams.mjs', (t) => {
+  const found = readTeamsSource()
+  if (!found) return t.skip('neither the working-tree file nor integrations/bankr-skill is available in this checkout')
+  t.diagnostic(`teams.mjs read from ${found.from}`)
   const dir = fs.mkdtempSync(join(tmpdir(), 'teams-'))
-  fs.writeFileSync(join(dir, 'teams.mjs'), src)
+  fs.writeFileSync(join(dir, 'teams.mjs'), found.src)
   return import(pathToFileURL(join(dir, 'teams.mjs')).href).then(({ TEAMS: theirs }) => {
     for (const sport of Object.keys(TEAMS)) {
       assert.deepEqual([...TEAMS[sport]].sort(), theirs.filter((x) => x.sport === sport).map((x) => x.nick).sort(), sport)
