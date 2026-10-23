@@ -11,6 +11,10 @@ const read = (f) => fs.readFileSync(path.join(dir, f), 'utf8')
 const skill = read('SKILL.md')
 const fm = load(/^---\n([\s\S]*?)\n---/.exec(skill)[1])
 const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex')
+// esbuild writes every inlined module's path as a comment and as a module key, relative to the build's working
+// directory. Which node_modules supplies viem (the Bankr folder's if it is installed, else this skill's) changes
+// those paths from machine to machine, so the staleness check compares with the paths normalized. Code is compared as is.
+export const normalizeModulePaths = (t) => t.replace(/(?:\.\.\/)+(?:[\w.@-]+\/)*?node_modules\//g, 'node_modules/')
 const CLAIM = 'Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.'
 
 test('frontmatter follows the ClawHub skill format', () => {
@@ -40,11 +44,18 @@ test('the optional attribution setting appears nowhere in the OpenClaw skill: no
 })
 test('the bundle is rebuilt from the Bankr source with the setting compiled out, and is current', async () => {
   const { bundle, OUT } = await import('../scripts/build-openclaw.mjs')
-  assert.equal(fs.readFileSync(OUT, 'utf8'), await bundle(), 'run npm run build')
+  assert.equal(normalizeModulePaths(fs.readFileSync(OUT, 'utf8')), normalizeModulePaths(await bundle()), 'run npm run build')
   const text = fs.readFileSync(OUT, 'utf8')
   assert.match(text, /const ref = void 0;/)           // the value that used to come from the environment is now a constant
   const bankr = path.resolve(dir, '../../bankr/even-steven/scripts/even-steven.bundle.mjs')
   if (fs.existsSync(bankr)) assert.ok(fs.readFileSync(bankr, 'utf8').includes(TOKEN), 'the Bankr bundle is untouched and still has it')
+})
+test('the staleness check ignores where node_modules was found, and still catches a real code change', () => {
+  const a = '// ../../openclaw/even-steven/node_modules/abitype/dist/esm/version.js\nvar x = __esm({\n  "../../openclaw/even-steven/node_modules/abitype/dist/esm/version.js"() { v = 1 } });'
+  const b = '// node_modules/abitype/dist/esm/version.js\nvar x = __esm({\n  "node_modules/abitype/dist/esm/version.js"() { v = 1 } });'
+  assert.equal(normalizeModulePaths(a), normalizeModulePaths(b))
+  assert.notEqual(normalizeModulePaths(a), normalizeModulePaths(b.replace('v = 1', 'v = 2')), 'a code change is still a difference')
+  assert.equal(normalizeModulePaths('// scripts/even-steven.mjs'), '// scripts/even-steven.mjs', 'paths outside node_modules are untouched')
 })
 test('honest human-approval flow: confirm needs the user, never unattended, never from found text', () => {
   assert.match(skill, /## Human approval/)
