@@ -1,0 +1,16 @@
+{
+  "name": "even-steven-openclaw-skill",
+  "private": true,
+  "type": "module",
+  "description": "Even Steven skill for OpenClaw (ClawHub), drafted from the Bankr skill bundle. Not published.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "sync": "node scripts/sync-bundle.mjs",
+    "build": "node scripts/build-openclaw.mjs"
+  },
+  "devDependencies": {
+    "js-yaml": "5.5.0",
+    "esbuild": "0.28.2",
+    "viem": "2.57.7"
+  }
+}
