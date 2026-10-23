@@ -14,7 +14,7 @@ Even Steven runs on Base. Every market is a standalone smart contract. Settlemen
 
 ## Build with Even Steven
 
-For developers and agents, [AGENTS.md](AGENTS.md) covers the HTTP API, gasless betting and claiming through the relay, and builder codes. A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To ask for a builder code, email evenstevenbet@gmail.com.
+For developers and agents, [AGENTS.md](AGENTS.md) covers the HTTP API, gasless betting and claiming through the relay, and builder codes. A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.
 
 ### Double your money on every winning bet
 
