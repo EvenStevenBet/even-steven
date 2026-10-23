@@ -1,9 +1,8 @@
 # Even Steven skill for Bankr (developer README)
 
 Source of truth for the Bankr skill. We mirror this folder to `BankrBot/skills/even-steven` by pull
-request later. **This README is for developers and partners. It is not part of the skill's
-reply templates: bettor-facing replies (SKILL.md and the script output) carry no builder-code or
-points copy.**
+request later. This README is for developers and partners. It is not part of the skill's
+reply templates: bettor-facing replies come from SKILL.md and the script output.
 
 ## What it does
 
@@ -27,8 +26,7 @@ Nothing else to install: `scripts/even-steven.bundle.mjs` is one self-contained 
 
 A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly.
 
-To ask for a builder code, email evenstevenbet@gmail.com. Only Jeff approves builders, and an
-unapproved code earns nothing.
+To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.
 
 The script sends no `ref` by default. A single optional setting, `ES_REF`, adds one constant `ref`
 to every relayed bet from that install. It is unset by default and is for an approved builder's own

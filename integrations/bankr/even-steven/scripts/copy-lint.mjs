@@ -16,6 +16,8 @@ export const FORBIDDEN = [
   ['at liquidity', /at liquidity/i], ['liquid market', /liquid market/i], ['balanced market', /balanced market/i], ['mature market', /mature market/i],
   ['Z line', /\bz line\b/i], ['oracleZ', /oracleZ/], ['lockedZ', /lockedZ/], ['guaranteed', /guaranteed/i], ['alpha', /\balpha\b/i],
   ['make more', /\bmake more\b/i], ['airdrop', /airdrop/i], ['half', /\bhalf\b/i], ['em dash', /—/],
+  // Builder-code contact wording is fixed: "To ask about a builder code, email ... Jeff approves each one." These older phrasings must not return in any file.
+  ['ask for a builder code', /ask for a builder code/i], ['Even Steven approves each builder', /even steven approves each builder/i],
 ]
 // "audited" is only allowed right before ", not a formal third-party audit" or right after "five internal audit rounds".
 const AUDITED = /audited/i

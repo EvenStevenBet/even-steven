@@ -29,8 +29,16 @@ test('copy lint rules: every forbidden term is caught', () => {
   const samples = { 'settlement fee': 'There is a settlement fee.', '4% friction': 'a 4% friction model', 'no fee': 'it has no fee', 'no vig': 'no vig here', 'no house edge': 'no house edge',
     'no house advantage': 'no house advantage', 'no house margin': 'no house margin', 'at liquidity': 'pays 2x at liquidity', 'liquid market': 'a liquid market', 'balanced market': 'a balanced market',
     'mature market': 'a mature market', 'Z line': 'the Z line moves', oracleZ: 'set oracleZ', lockedZ: 'your lockedZ', guaranteed: 'guaranteed win', alpha: 'real alpha', 'make more': 'helps you make more',
-    airdrop: 'an airdrop', half: 'half the pool', 'em dash': 'one — two' }
+    airdrop: 'an airdrop', half: 'half the pool', 'em dash': 'one — two',
+    'ask for a builder code': 'To ask for a builder code, email us.', 'Even Steven approves each builder': 'Even Steven approves each builder.' }
   for (const [name] of FORBIDDEN) { assert.ok(samples[name], 'sample for ' + name); assert.ok(hits(samples[name]).includes(name), name + ' not caught in: ' + samples[name]) }
+})
+test('copy lint rules: the old builder-contact wording is rejected in every file, and the approved line is not', () => {
+  for (const bad of ['To ask for a builder code, email evenstevenbet@gmail.com.', 'Even Steven approves each builder.', 'TO ASK FOR A BUILDER CODE'])
+    for (const opts of [{}, { bettorFacing: true }]) assert.ok(hits(bad, opts).some((r) => r === 'ask for a builder code' || r === 'Even Steven approves each builder'), bad)
+  assert.ok(FORBIDDEN.some(([n]) => n === 'ask for a builder code') && FORBIDDEN.some(([n]) => n === 'Even Steven approves each builder'), 'in the all-files list, not only the bettor-facing one')
+  assert.deepEqual(hits('To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.'), [])
+  for (const f of userFacing(dir)) assert.ok(!/ask for a builder code|even steven approves each builder/i.test(f.text), f.label + ' still has the old wording')
 })
 test('copy lint rules: near misses are not flagged', () => {
   assert.deepEqual(hits('on behalf of someone; alphabet; a half-court shot is not here'.replace('half-court', 'halftime')), [])
