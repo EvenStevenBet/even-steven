@@ -8,8 +8,13 @@ skill. Read-only plus one offline signature. **Moves no funds.**
 ```bash
 cd integrations/bankr/probe
 npm install
-BANKR_API_KEY=bk_... node probe.mjs
+./run.sh            # asks for the key with hidden input; extra args go to probe.mjs, e.g. ./run.sh --market 0x...
 ```
+
+`run.sh` reads the key silently, prints only its length and whether it starts with `bk_`, trims
+whitespace, hands it to the single `node probe.mjs` process, and unsets it on exit. It checks for
+Node 20+ and for `node_modules` first. It never prints or writes the key. (Running
+`BANKR_API_KEY=bk_... node probe.mjs` directly still works, but leaves the key in your shell history.)
 
 Node 20+. The key needs `walletApiEnabled` and must not be read-only, or `/wallet/sign`
 answers 403 (that is itself a useful result: paste it back). Optional `MARKET` (or `--market <address>`) picks the target market; see step 3. Optional `BASE_RPC_URL`
@@ -55,6 +60,7 @@ It contains no secret.
 
 ```bash
 npm test                    # unit tests: mocked Bankr API and RPC, throwaway key, no network
+bash run.test.sh            # run.sh against a stub node: key hidden, trimmed, never printed
 ```
 
 Fork test (Base mainnet fork, real Circle USDC, fork-only funded accounts, no keys):
