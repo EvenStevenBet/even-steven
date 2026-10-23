@@ -16,7 +16,7 @@ For developers and agents. Back either side at even money, lock a better spread 
 
 - **Gasless betting.** Sign a USDC authorization in your own wallet and send it to the relay. The relay pays the gas, you need USDC only, and the relay never holds your money.
 - **Claiming.** Claiming is gasless through POST /api/claim or the claim button, and depends on the relay being up. If the relay is down, claim directly with a little ETH.
-- **Builder codes.** A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. Even Steven approves each builder. To ask for a builder code, email evenstevenbet@gmail.com. Details are under **Builder codes and refs** below.
+- **Builder codes.** A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one. Details are under **Builder codes and refs** below.
 - **Markets.** Only the Even Steven owner or a whitelisted operator creates markets.
 - **Where to start.** Read-only market data and quotes: **HTTP Agent API (x402)**. Placing a bet: **Placing a bet via the relay (POST /api/bet)**. Collecting a payout: **Claiming via the relay (POST /api/claim)**.
 
@@ -305,7 +305,7 @@ not reusable:
 
 A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly.
 
-Builders are approved by Even Steven, and an unapproved code earns nothing. Earnings come from a weekly report, are computed on the bets routed through the code, and are paid manually in USDC after review. To ask for a builder code, email evenstevenbet@gmail.com.
+An unapproved code earns nothing. To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.
 
 `ref` accepts an approved builder code (lowercase `[a-z0-9-]{3,32}`) or any wallet address. An unknown or malformed value is ignored and the bet is placed anyway. When `ref` resolves, the relay writes it into an ERC-8021 schema-0 calldata suffix on the same transaction, so the attribution is on-chain. The market ignores trailing calldata, and nothing about the bet changes. A `ref` that would pay the bettor (the bettor's own address, or a builder code whose payout address is the bettor's) is dropped: self-referral earns nothing. Only the holder of the signed authorization can submit it, so only the submitter chooses the ref.
 
