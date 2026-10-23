@@ -1,8 +1,7 @@
 # Even Steven skill for Bankr (developer README)
 
-Source of truth for the Bankr skill. We mirror this folder to `BankrBot/skills/even-steven` by pull
-request later. This README is for developers and partners. It is not part of the skill's
-reply templates: bettor-facing replies come from SKILL.md and the script output.
+Source of truth for the Bankr skill. This README is for developers and partners. It is not part of
+the skill's reply templates: bettor-facing replies come from SKILL.md and the script output.
 
 ## What it does
 
