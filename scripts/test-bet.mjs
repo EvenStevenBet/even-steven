@@ -12,6 +12,7 @@
  *                        plan covers Base, else from a public Base RPC (independent of the API's)
  *   ALCHEMY_RPC_URL / ALCHEMY_KEY / MAINNET_RPC   reads (public RPC fallback)
  *   API_URL              default http://localhost:3000/api/bet
+ *   SIDE                 home (default) or away: which side the 1 USDC bet takes
  *
  *   VERIFY_TX=0x... node test-bet.mjs   re-runs only the post-trade checks against
  *                                       an existing bet tx — signs and POSTs nothing.
@@ -38,7 +39,10 @@ const MARKET = getAddress(rawMarket)
 const USDC = getAddress('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
 const RELAY = await resolveRelayAddress() // from data/relay.json, never hard-coded (see relay-address.mjs)
 const API_URL = process.env.API_URL || 'http://localhost:3000/api/bet'
-const GREATER_THAN = true // HOME = Dolphins
+// SIDE=home (default) bets greaterThan: true, the first team named in gameId. SIDE=away bets the other side.
+const SIDE = (process.env.SIDE || 'home').trim().toLowerCase()
+if (SIDE !== 'home' && SIDE !== 'away') { console.error('FAIL: SIDE must be "home" or "away"'); process.exit(1) }
+const GREATER_THAN = SIDE === 'home'
 const STAKE = 1_000_000n
 
 const die = (m) => { console.error('FAIL:', m); process.exit(1) }
