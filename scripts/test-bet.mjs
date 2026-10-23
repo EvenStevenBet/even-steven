@@ -186,8 +186,21 @@ check('bettor -> market transfer equals stake + fee',
   transfers.some((t) => getAddress(t.args.from) === bettor.address && getAddress(t.args.to) === MARKET && t.args.value === value))
 
 // ── 6. relay balances after ────────────────────────────────────────────────
-const [relayEth, relayUsdc] = await Promise.all([pub.getBalance({ address: RELAY }), usdcBal(RELAY)])
-console.log(`\nrelay after : ETH ${formatEther(relayEth)}, USDC ${formatUnits(relayUsdc, 6)}`)
+// ETH is read AT the bet's block and the block before it, not at "latest": a load-balanced RPC node can
+// answer "latest" from a block that predates the bet and print the old balance as if nothing was spent.
+const betBlock = BigInt(receipt.blockNumber)
+try {
+  const [ethBefore, ethAfter] = await Promise.all([
+    pub.getBalance({ address: RELAY, blockNumber: betBlock - 1n }),
+    pub.getBalance({ address: RELAY, blockNumber: betBlock }),
+  ])
+  console.log(`\nrelay ETH   : ${formatEther(ethBefore)} (block ${betBlock - 1n}) -> ${formatEther(ethAfter)} (block ${betBlock}), gas paid ${formatEther(ethBefore - ethAfter)}`)
+  check('relay paid the gas (its ETH fell at the bet block)', ethAfter < ethBefore, formatEther(ethBefore - ethAfter))
+} catch (err) {
+  console.log('\nrelay ETH   : could not read the balance at the bet block:', (err.shortMessage || err.message).split('\n')[0])
+}
+const relayUsdc = await usdcBal(RELAY)
+console.log(`relay USDC  : ${formatUnits(relayUsdc, 6)}`)
 check('relay USDC balance is 0', relayUsdc === 0n, formatUnits(relayUsdc, 6))
 
 process.exit(checks.every(Boolean) ? 0 : 1)
