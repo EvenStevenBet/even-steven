@@ -29,6 +29,6 @@ jobs:
       - run: node --test scripts/wallet-balance-check.test.mjs scripts/relay-address.test.mjs
       - run: node scripts/wallet-balance-check.mjs
         env:
-          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          BASE_RPC_URL: ${{ secrets.RPC_URL }}
           RELAY_MIN_BALANCE_ETH: ${{ vars.RELAY_MIN_BALANCE_ETH || '0.0021' }}
           OWNER_MIN_BALANCE_ETH: ${{ vars.OWNER_MIN_BALANCE_ETH || '0.0003' }}
