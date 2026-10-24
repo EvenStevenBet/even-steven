@@ -1,23 +1,36 @@
 # The Z Line
 
-The Z line is Even Steven's dynamic pricing mechanism — and the reason the protocol can offer near-even payouts without a house or market makers.
+Z is the number the contract keeps for the line. It moves with the money to pull the two pools toward balance, so Even Steven needs no house betting against you.
 
-## What the Z line does
+## What Z does
 
-The Z line moves based on betting activity to balance the pools. When pools are balanced, every bettor on the winning side earns nearly 1:1 on their stake — the near-even payout that Even Steven is named for.
+Z moves as bets arrive. A balanced pool pays even money. When one side holds more money, Z moves to make the lighter side more attractive, and the next bet can move it again. Balance means equal money on both sides, and it is momentary: every bet moves the pools and the line.
 
-The Z line is the liquidity incentive mechanism. When a market opens, the Z line creates favorable odds on the minority side. A bet on the lighter side locks the line as it stands when that bet lands. Each later bet moves the line again, toward the side with less money. When the pools are balanced — equal money on both sides — a winning stake returns 2×; the next bet can move them apart again.
-
-Balance means equal money on both sides. It is momentary: every bet moves the pools and the line.
+Your bet locks the line in force when it lands, and that line never changes. Later bets move the line for later bettors. Your payout is set at settlement from the final pool.
 
 ## What Z represents
 
-Z is the line at which the bet splits into two sides:
+Z is the final spread (home score minus away score) at which a bet splits into two sides:
 
-- **Greater than:** You win if `finalSpread > lockedZ`
-- **Less than or equal to:** You win if `finalSpread <= lockedZ`
+- **Home** (`greaterThan = true`): you win if `finalSpread * 10000 > lockedZ`
+- **Away** (`greaterThan = false`): you win if `finalSpread * 10000 <= lockedZ`
 
-Z is expressed in 4-decimal fixed-point. `-35000` means `-3.5` in spread terms. A Chiefs -3.5 opening line would have `initialZ = -35000`.
+Exactly one side wins every bet. There are no pushes: a tie (`finalSpread = 0`) goes to whichever side the rule above gives it.
+
+Z is expressed in 4-decimal fixed-point, so `-35000` means `-3.5`. **The sign is from the home side's point of view, and it points at the underdog.** The home side is quoted `-Z` and the away side is quoted `+Z`:
+
+| `Z` | Home is quoted | Away is quoted | Favorite |
+|---|---|---|---|
+| `-35000` | +3.5 | -3.5 | the away team, by 3.5 |
+| `0` | pick'em | pick'em | none |
+| `+35000` | -3.5 | +3.5 | the home team, by 3.5 |
+
+So at `Z = -35000` the away team is the favorite: it has to win by 4 or more for the away bet to win, and the home bet wins if the home team wins, ties, or loses by 3 or fewer. The API's `currentZDisplay` and `lockedZDisplay` fields are just `Z / 10000`, not a quoted spread.
+
+**Worked example.** Chiefs (home) vs 49ers (away), `lockedZ = -35000`:
+
+- Final spread **+3** (Chiefs win by 3): `30000 > -35000` is true, so the **home** bet wins.
+- Final spread **-4** (49ers win by 4): `-40000 > -35000` is false, so the **away** bet wins. (If the 49ers had won by only 3, `-30000 > -35000` is true and the home bet would have won.)
 
 ## How Z moves
 
@@ -29,25 +42,21 @@ Z = initialZ + K * ln(greaterPool / lessEqualPool)
 
 Where `K = 50000` controls sensitivity.
 
-When more money flows to the "greater than" side, Z rises. When more money flows to "less than or equal to," Z falls. At equal pools, Z returns exactly to `initialZ`.
+When more money flows to the home side, Z rises, which asks more of the home team (and offers the away side a better spread). When more money flows to the away side, Z falls. At equal pools, Z returns exactly to `initialZ`. The movement is algorithmic and transparent: it exists to balance the pools, and it is not a margin taken from you.
 
-This mirrors how sportsbooks move lines when action is lopsided — except here the movement is algorithmic, transparent, and designed to reach equilibrium, not extract vig.
-
-**Example:** Market opens at `initialZ = -35000` with both pools at 1 USDC seed. A bettor stakes 10 USDC on "greater than." Now `greaterPool = 11`, `lessEqualPool = 1`. The ratio is 11:1, so `ln(11) ≈ 2.398`. New Z = -35000 + (50000 × 2.398) = +84,900. The line has shifted from Chiefs -3.5 all the way to Chiefs +8.5 — a massive swing from a single early bet, exactly what's needed to attract opposing flow back to the minority side.
+**Example.** A market opens at `initialZ = -35000` with both pools at 1 USDC seed, Chiefs (home) vs 49ers (away). A bettor stakes 10 USDC on home. Now `greaterPool = 11` and `lessEqualPool = 1`. The ratio is 11:1, so `ln(11) ≈ 2.398`. New Z = -35000 + (50000 × 2.398) = +84,900. The line has moved from 49ers -3.5 to Chiefs -8.5, a large swing from a single early bet. That is what pulls opposing money to the away side.
 
 ## Locked Z
 
-When you place a bet, your `lockedZ` is recorded at that moment and never changes.
+When you place a bet, your `lockedZ` is recorded at that moment and never changes. Your win condition is fixed at that time, and later bettors moving the line do not change whether you win or lose.
 
-Your win condition is fixed at the time you bet. Later bettors moving the Z line don't retroactively change whether you win or lose.
+**Example.** Chiefs (home) vs 49ers (away):
 
-**Example:**
-
-1. Market opens at Z = -35000 (Chiefs -3.5)
-2. Heavy betting on "greater than" pushes Z to +10000 (Chiefs +1.0)
-3. You bet "less than or equal to" at this point — your `lockedZ = +10000`
-4. Chiefs win by 7. `finalSpread * 10000 = 70000`. Check: `70000 <= 10000` is false — you lose.
-5. **If you had bet "less than or equal to" at step 1** with `lockedZ = -35000`: `70000 <= -35000` is also false — same outcome for this specific final spread. But your locked Z covers a different range of outcomes. At `lockedZ = +10000`, you'd win on any spread of +1 or worse for the home team — a wider winning range than `lockedZ = -35000`, but a position taken when the crowd was already heavy on the "greater than" side. The earlier you bet on the minority side, the wider your winning range tends to be at favorable Z values.
+1. The market opens at `Z = -35000` (49ers -3.5).
+2. Heavy betting on home pushes Z to `+10000` (Chiefs -1.0, 49ers +1.0).
+3. You bet away at this point, so your `lockedZ = +10000`. You hold the 49ers at +1.0: you win if the 49ers win, tie, or lose by 1.
+4. The Chiefs win by 7. `finalSpread * 10000 = 70000`, and `70000 <= 10000` is false, so you lose.
+5. Had you bet away at step 1, your `lockedZ = -35000` (49ers -3.5), and `70000 <= -35000` is also false, so the outcome is the same for this final spread. The two bets cover different ranges, though. At `lockedZ = +10000` the away bet wins on any final spread of +1 or lower. At `lockedZ = -35000` it wins only on -4 or lower. Backing the lighter side after the home flow locked a better spread than the opening line offered.
 
 ## Pool ratio clamp
 
@@ -55,12 +64,12 @@ The atanh series used to calculate `ln()` degrades above a 19:1 pool ratio. Abov
 
 ## Z bounds
 
-Z is hard-clamped to ±500.0000 (±5000000 in 4-decimal). This prevents extreme imbalances from pushing Z into ranges where the win condition becomes meaningless — for example, a Z value beyond any plausible final spread would make all bets on one side trivially winning or losing. The bounds keep the market mathematically coherent even at the edges.
+Z is hard-clamped to ±500.0000 (±5000000 in 4-decimal). This prevents extreme imbalances from pushing Z into ranges where the win condition becomes meaningless: a Z beyond any plausible final spread would make all bets on one side trivially winning or losing. The bounds keep the market mathematically coherent at the edges.
 
-## Strategic implications
+## Reading the quote
 
-Betting early on the minority side locks a favorable Z before the market adjusts. Your position gets better as opposing money comes in — this is the early-bettor reward built into the protocol.
+Because your bet locks the spread when it lands, getting in early can lock a better spread than the crowd gets later. That is about the spread you lock, not the payout.
 
-`getMarketEV(stake, greaterThan)` returns `currentPayout` and `liquidPayout` (the payout at liquidity, when pools are balanced). If `currentPayout > liquidPayout`, you're catching an early imbalance — favorable odds that improve your position relative to liquidity. If they're equal, the market is already balanced and you're getting the steady-state even payout.
+`getMarketEV(stake, greaterThan)` returns `currentPayout` and `liquidPayout`. `currentPayout` is the gross return if betting closed with the pools as they are now. `liquidPayout` is the payout when the two pools are balanced. If `currentPayout` is higher, your side holds the smaller share of the money right now. If they are equal, the pools are balanced right now. Either way the payout is set at settlement from the final pool, and later bets can change both numbers before betting closes.
 
-The Z line means you're competing against other bettors in a transparent, algorithmic market — not against a sportsbook moving lines to extract vig, and not against an order book where market makers price you out. The line moves to balance the market, not to disadvantage you.
+The fee is separate from all of this: a flat 2% of your bet, paid upfront. Nothing else.

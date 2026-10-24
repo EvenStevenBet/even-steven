@@ -6,11 +6,15 @@ Crypto's core promise is removing the trusted third party. In betting, that thir
 
 **Kalshi and Polymarket didn't.** They moved on-chain and kept the house — they just renamed it. The *overround*, where both sides of the book sum past 100¢, is the house's cut. *Slippage*, where your order walks the book against you, is the house's cut. Their taker fees are the house's cut. It is the same margin a bookie always took, renamed and ported to an order book. They kept it because the house is profitable and they like the margin.
 
-**Even Steven removes it.** No house, no spread, no vig, no overround, no slippage. It is parimutuel: winners split losers' stakes at even odds, so a winning bet doubles your stake. Your only cost is a flat 2% protocol fee, charged on your stake when you bet — known before you commit, immutable for the life of the market. Remove the house, and betting becomes even.
+Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
 This is not a cheaper house. It is a different product. We do not just win on fees — we changed what a bet is.
 
 Even Steven runs on Base. Every market is a standalone smart contract. Settlement is trustless via UMA's Optimistic Oracle. Designed for AI agents.
+
+## Build with Even Steven
+
+For developers and agents, [AGENTS.md](AGENTS.md) covers the HTTP API, gasless betting and claiming through the relay, and builder codes. A builder code earns 30% of the 2% fee on every bet routed through it, paid weekly. To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.
 
 ### Double your money on every winning bet
 
@@ -46,7 +50,7 @@ Even Steven has no maker/taker distinction — the 2.00% is a flat protocol fee 
 
 ### How this was calculated
 
-**Even Steven:** $100 stake into a liquid market. You pay a 2% protocol fee on your stake up front: $2, swept to the market owner at placement. Total out of pocket = $102. At liquidity the pools are balanced, so the winning side's stakes are half the pool, and winners split 100% of all stakes with no haircut. A $100 winning stake returns $200 gross. Net profit = $200 − $102 = $98. Fair profit = $100. Friction = $2 = 2.00% of stake. The fee is charged once, at placement, on your stake alone — never on the pool, never at settlement. There is no second number.
+**Even Steven:** $100 stake into a liquid market. You pay a 2% protocol fee on your stake up front: $2, swept to the market owner at placement. Total out of pocket = $102. When the pools are balanced, the winning and losing sides hold equal stakes, and winners split 100% of all stakes with no haircut. A $100 winning stake returns $200 gross. Net profit = $200 − $102 = $98. Fair profit = $100. Friction = $2 = 2.00% of stake. The fee is charged once, at placement, on your stake alone — never on the pool, never at settlement. There is no second number.
 
 **Polymarket US (post-April 30, 2026):** Taker fee uses the dynamic formula `C × 0.05 × p × (1−p)` where C = contracts and p = share price. At p=0.50, this produces a 2.50% fee on notional — added on top of your stake, not deducted. Overround verified from live Polymarket screenshots: buy-side prices sum to 101¢ on liquid NBA markets (1¢ overround = ~2% of position). Sell-side sums to 99¢ — confirming the market maker extracts from both directions. Slippage data from order book depth analysis: liquid NFL markets show ~0.4% on $1,000 orders; illiquid markets show 3.5%+.
 
@@ -102,7 +106,7 @@ Z = initialZ + K * ln(greaterPool / lessEqualPool)
 ```
 
 - Z starts at `oracleZ` — the opening consensus line set at market creation
-- Z is expressed in 4-decimal fixed-point: `-35000` means `-3.5` (Chiefs -3.5)
+- Z is expressed in 4-decimal fixed-point: `-35000` means `-3.5`. The sign is from the home side's point of view and points at the underdog: the home side is quoted `-Z`, so at `-35000` the home side is quoted +3.5 and the away team is the favorite
 - When you place a bet, your `lockedZ` is recorded at that moment and never changes
 - As more money flows to one side, Z moves to attract the other side
 - At equal pools, Z returns exactly to `initialZ`
@@ -113,7 +117,7 @@ Your bet wins if `finalSpread * 10000` crosses your `lockedZ` in the direction y
 - `greaterThan = true`: you win if `finalSpread * 10000 > lockedZ`
 - `greaterThan = false`: you win if `finalSpread * 10000 <= lockedZ`
 
-Example: You bet `greaterThan = true` when Z = `-35000` (Chiefs -3.5). Chiefs win by 7. `finalSpread = 7`, so `70000 > -35000` — you win.
+Example: Chiefs (home) vs 49ers (away), `lockedZ = -35000` (49ers -3.5, Chiefs +3.5). The Chiefs win by 7, so `finalSpread = 7` and `70000 > -35000`: the home bet (`greaterThan = true`) wins. If instead the 49ers win by 4, `finalSpread = -4` and `-40000 > -35000` is false: the away bet (`greaterThan = false`) wins.
 
 ---
 
@@ -386,7 +390,7 @@ Markets are deployed per game by the factory. Use `getOpenMarkets()` to discover
 ## Technical Notes
 
 - Solidity `0.8.20+commit.a1b79de6`, OpenZeppelin v4.9.3
-- Optimizer: enabled, runs=1 (this is the audited/deployed v1.10/v1.5 build — do not substitute
+- Optimizer: enabled, runs=1 (this is the deployed v1.10/v1.5 build — do not substitute
   50 runs or Paris, which describe the superseded v1.8.1/v1.3 build)
 - EVM target: Shanghai
 - All USDC amounts in 6 decimal units: `1 USDC = 1000000 = 1e6`
@@ -431,6 +435,6 @@ Any agent can verify these numbers in under 60 seconds: open any sports market o
 ---
 
 *Protocol version: v1.10 — September 2026*
-*Audited by Claude Opus, five rounds, March–June 2026. All critical and high findings resolved. Not a formal third-party audit. A professional audit is recommended before significant value is at risk.*
+*Five internal audit rounds, not a formal third-party audit (March–June 2026). All critical and high findings resolved. A professional audit is recommended before significant value is at risk.*
 *Contact: evenstevenbet@gmail.com*
 *Website: evensteven.bet*
