@@ -1,8 +1,13 @@
 // node --test scripts/x-search.test.mjs
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { COLUMNS, collect, nextBatch, planWrite, writeTab, serviceAccountJwt, toRows, xSearch } from './x-search.mjs'
+import { COLUMNS, collect, nextBatch, planWrite, writeTab, serviceAccountJwt, toRows, xSearch, requireSecrets } from './x-search.mjs'
 
 const body = ids => ({
   data: ids.map(id => ({ id, author_id: 'u' + id, text: `=SUM(${id})`, created_at: '2026-10-17T00:00:00Z', public_metrics: { like_count: 3, retweet_count: 1 } })),
@@ -100,4 +105,59 @@ test('writeTab replaces an existing tab on a clean run and adds a missing one', 
     await writeTab({ sa: sa(), folderName: 'F', fileName: 'S', tab: '2026-10-19', rows: [['a']], onlyIfNew: true })
     assert.ok(m.calls.some(c => /batchUpdate/.test(c)) && m.calls.some(c => /^PUT/.test(c)))
   } finally { m.restore() }
+})
+
+// ---- secrets are checked before the first X request ----
+const SA = JSON.stringify({ client_email: 'sa@x.iam.gserviceaccount.com', private_key: 'not-a-real-key' })
+
+test('requireSecrets names every missing secret, and the Google key only matters when the run writes to Drive', () => {
+  assert.throws(() => requireSecrets({}, { dryRun: false }), /missing required secrets: X_READ_BEARER_TOKEN, GOOGLE_SERVICE_ACCOUNT_JSON/)
+  assert.throws(() => requireSecrets({ X_READ_BEARER_TOKEN: 't' }, { dryRun: false }), /missing required secret: GOOGLE_SERVICE_ACCOUNT_JSON\./)
+  assert.throws(() => requireSecrets({ GOOGLE_SERVICE_ACCOUNT_JSON: SA }, { dryRun: false }), /missing required secret: X_READ_BEARER_TOKEN\./)
+  assert.throws(() => requireSecrets({ X_READ_BEARER_TOKEN: '   ', GOOGLE_SERVICE_ACCOUNT_JSON: SA }, { dryRun: false }), /X_READ_BEARER_TOKEN/, 'blank counts as missing')
+  assert.throws(() => requireSecrets({}, { dryRun: true }), /missing required secret: X_READ_BEARER_TOKEN\./)
+  assert.deepEqual(requireSecrets({ X_READ_BEARER_TOKEN: ' t ' }, { dryRun: true }), { token: 't', sa: null })
+  assert.equal(requireSecrets({ X_READ_BEARER_TOKEN: 't', GOOGLE_SERVICE_ACCOUNT_JSON: SA }, { dryRun: false }).sa.client_email, 'sa@x.iam.gserviceaccount.com')
+})
+
+test('a malformed Google key is rejected up front, and the message never contains the secret', () => {
+  const secret = '{"client_email": "leak-me@x", "private_key": SUPER-SECRET-VALUE'
+  let err
+  try { requireSecrets({ X_READ_BEARER_TOKEN: 't', GOOGLE_SERVICE_ACCOUNT_JSON: secret }, { dryRun: false }) } catch (e) { err = e }
+  assert.match(err.message, /GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON/)
+  assert.doesNotMatch(err.message, /SUPER-SECRET-VALUE|leak-me/)
+  assert.throws(() => requireSecrets({ X_READ_BEARER_TOKEN: 't', GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"a@b"}' }, { dryRun: false }), /no client_email and private_key/)
+})
+
+// The real script, with fetch replaced by a recorder, so "no X request is made" is observed, not assumed.
+const SCRIPT = fileURLToPath(new URL('./x-search.mjs', import.meta.url))
+const SPY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-spy-'))
+const SPY = path.join(SPY_DIR, 'spy.mjs')
+fs.writeFileSync(SPY, "globalThis.fetch = async (url) => { console.error('FETCH_CALLED ' + (url.href ?? String(url))); throw new Error('network disabled in this test') }\n")
+const runScript = (env) => spawnSync(process.execPath, ['--import', pathToFileURL(SPY).href, SCRIPT], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8', timeout: 30_000 })
+
+test('with the Google secret missing, no X request is made, and the error names it', () => {
+  const r = runScript({ X_READ_BEARER_TOKEN: 'a-token' })
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /missing required secret: GOOGLE_SERVICE_ACCOUNT_JSON/)
+  assert.doesNotMatch(r.stderr + r.stdout, /FETCH_CALLED/, 'nothing was requested')
+})
+
+test('with both secrets missing, no request is made and both are named', () => {
+  const r = runScript({})
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /missing required secrets: X_READ_BEARER_TOKEN, GOOGLE_SERVICE_ACCOUNT_JSON/)
+  assert.doesNotMatch(r.stderr + r.stdout, /FETCH_CALLED/)
+})
+
+test('positive control: with both secrets present the script does reach X (so the recorder above is live)', () => {
+  const r = runScript({ X_READ_BEARER_TOKEN: 'a-token', GOOGLE_SERVICE_ACCOUNT_JSON: SA })
+  assert.match(r.stderr, /FETCH_CALLED https:\/\/api\.x\.com\/2\/tweets\/search\/recent/)
+  assert.doesNotMatch(r.stderr, /FETCH_CALLED [^\n]*googleapis/, 'Google is not contacted when X returned nothing')
+})
+
+test('a dry run needs no Google secret and does reach X', () => {
+  const r = runScript({ X_READ_BEARER_TOKEN: 'a-token', DRY_RUN: 'true' })
+  assert.match(r.stderr, /FETCH_CALLED https:\/\/api\.x\.com/)
+  assert.doesNotMatch(r.stderr, /missing required secret/)
 })

@@ -5,9 +5,11 @@
 // "Even Steven Growth" through a service account that only that folder is shared with.
 //
 // Env:
-//   X_READ_BEARER_TOKEN            the read-only app's bearer token (GitHub secret)
-//   GOOGLE_SERVICE_ACCOUNT_JSON    the service account's key file contents (GitHub secret)
-//   DRY_RUN=true                   search and print the rows; write nothing to Drive
+//   X_READ_BEARER_TOKEN            the read-only app's bearer token (GitHub secret). Required.
+//   GOOGLE_SERVICE_ACCOUNT_JSON    the service account's key file contents (GitHub secret). Required unless DRY_RUN=true.
+//                                  Both are checked before the first X request, so a missing or malformed secret can
+//                                  never cost X read credits; the error names whichever is missing.
+//   DRY_RUN=true                   search and print the rows; write nothing to Drive (the Google secret is not needed)
 //   X_SEARCH_DATE                  override the sheet date (YYYY-MM-DD, default today UTC)
 //
 // No key, token or credential is ever put in a row, a sheet name or a log line.
@@ -161,6 +163,28 @@ export async function writeTab({ sa, folderName, fileName, tab, rows, onlyIfNew 
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Pure. Every secret this run will need, checked before the first X call. The Google key is needed only when the run
+ * will write to Drive (not in a dry run). Error messages name the secret, never its value.
+ */
+export function requireSecrets(env, { dryRun }) {
+  const blank = (v) => v === undefined || v === null || String(v).trim() === ''
+  const missing = []
+  if (blank(env.X_READ_BEARER_TOKEN)) missing.push('X_READ_BEARER_TOKEN')
+  if (!dryRun && blank(env.GOOGLE_SERVICE_ACCOUNT_JSON)) missing.push('GOOGLE_SERVICE_ACCOUNT_JSON')
+  if (missing.length) throw new Error(`missing required secret${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Nothing was requested from X.`)
+  let sa = null
+  if (!dryRun) {
+    try { sa = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON) } catch {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON (it must be the whole key file). Nothing was requested from X.')
+    }
+    if (!sa || typeof sa.client_email !== 'string' || typeof sa.private_key !== 'string') {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON has no client_email and private_key. Nothing was requested from X.')
+    }
+  }
+  return { token: env.X_READ_BEARER_TOKEN.trim(), sa }
+}
+
 async function main() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   const cfg = JSON.parse(fs.readFileSync(path.join(root, 'data/x-search-queries.json'), 'utf8'))
@@ -169,9 +193,9 @@ async function main() {
   const dryRun = process.env.DRY_RUN === 'true'
   const date = process.env.X_SEARCH_DATE || new Date().toISOString().slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('X_SEARCH_DATE must be YYYY-MM-DD')
-  if (!process.env.X_READ_BEARER_TOKEN) throw new Error('X_READ_BEARER_TOKEN is not set')
+  const { token, sa } = requireSecrets(process.env, { dryRun }) // before the first X request
 
-  const { rows, error } = await collect({ ...cfg, maxPostsPerRun: cap }, xSearch(process.env.X_READ_BEARER_TOKEN))
+  const { rows, error } = await collect({ ...cfg, maxPostsPerRun: cap }, xSearch(token))
   console.log(JSON.stringify({ event: 'collected', posts: rows.length, cap, queries: cfg.queries.length, error: error?.message ?? null }))
 
   if (dryRun) {
@@ -181,8 +205,6 @@ async function main() {
     const plan = planWrite({ rows, error })
     if (plan === 'skip') console.log(JSON.stringify({ event: 'not_written', reason: 'no rows; the sheet was not touched' }))
     else {
-      if (!process.env.GOOGLE_SERVICE_ACCOUNT_JSON) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not set')
-      const sa = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON)
       const r = await writeTab({ sa, folderName: cfg.driveFolderName, fileName: SHEET_FILE_NAME, tab: date, rows, onlyIfNew: plan === 'write-if-new' })
       console.log(JSON.stringify(r.skipped
         ? { event: 'not_written', reason: `run failed part-way and tab ${date} already exists; kept it`, rows: rows.length }
