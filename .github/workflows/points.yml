@@ -24,7 +24,7 @@ jobs:
       - run: node --test scripts/points.test.mjs
       - run: node scripts/points.mjs
         env:
-          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+          BASE_RPC_URL: ${{ secrets.RPC_URL }}
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
           KV_REST_API_READ_ONLY_TOKEN: ${{ secrets.KV_REST_API_READ_ONLY_TOKEN }}
           POINTS_PER_USDC: ${{ vars.POINTS_PER_USDC || '100' }}
