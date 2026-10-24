@@ -38,8 +38,16 @@ needs no outside data. A final score cannot be derived from it and no sports-dat
   `dry_run` input (default true).
 - One post per event per market, recorded in `data/x-posts-state.json` after each post. Only the latest stage reached is
   posted; earlier ones are marked `superseded` (a market found already closed gets "Betting is closed", not a stale "open").
-- `data/x-posts-config.json` `notBefore` (2026-10-20) ignores markets whose gameId date is earlier, so nothing already
-  open or settled posts at go-live. A cap of 3 posts per run (`X_MAX_POSTS_PER_RUN`) is a second guard.
+- **Go-live cutoff.** The repository variable `X_POSTS_NOT_BEFORE` (an ISO 8601 time such as `2026-10-26T00:00:00Z`, or a
+  UTC date) is the cutoff. An event is skipped if its own on-chain time is earlier: the market's creation block for
+  "opened" (a market stores no open time, so it is found by binary search over `eth_getCode`), `bettingClosedAt` for
+  "closed", `settledAt` for "settled". A market whose open time cannot be determined is skipped, never guessed. **Live mode
+  refuses to start, with an error, if the variable is unset.** In a dry run, unset means no time filter. There is no config
+  file. A cap of 3 posts per run (`X_MAX_POSTS_PER_RUN`) is a second guard.
+- **"Final" means resolved, not asserted.** A market counts as settled only when `settled()` is true, which the contract sets
+  in `_settleMarket`, reached from `executeSettlement()` after UMA's `settleAndGetAssertionResult` returns true. A settlement
+  that is only asserted (`assertionActive`), disputed, or rejected never posts. A settled market that ends in refund mode
+  (no winning stakes) posts nothing.
 - Any failed post (403/429/401, any 4xx, 5xx, or no response) records the attempt, sets `disabled` in the state file,
   fails the run with an error annotation and posts nothing more until a human clears `disabled`. No retry.
 - Markets come from `SportsbookFactory v1.6 getAllMarkets()` (last 25); older factories are not covered.
@@ -48,5 +56,5 @@ needs no outside data. A final score cannot be derived from it and no sports-dat
 ## Secrets (GitHub only)
 
 `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET` (the posting app, OAuth 1.0a user context, app
-permission "Read and write"), plus the existing `RPC_URL` and `FACTORY_ADDRESS`. Variables: `X_POSTS_ENABLED`,
+permission "Read and write"), plus the existing `RPC_URL` and `FACTORY_ADDRESS`. Variables: `X_POSTS_ENABLED`, `X_POSTS_NOT_BEFORE` (required to go live),
 `X_POSTS_DRY_RUN`.

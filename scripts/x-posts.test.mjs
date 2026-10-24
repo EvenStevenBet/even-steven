@@ -1,7 +1,11 @@
 // node --test scripts/x-posts.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EVEN_MONEY, assertPostable, byText, eligible, oauthHeader, parseGameId, pendingFor, postToX, render, resultText,
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import os from 'node:os'
+import path from 'node:path'
+import { EVEN_MONEY, assertPostable, byText, creationTimestamp, oauthHeader, parseNotBefore, requireNotBefore, parseGameId, pendingFor, postToX, render, resultText,
          runOnce, stageOf } from './x-posts.mjs'
 
 const GID = 'NFL-2026-10-18-HOME-Packers-AWAY-Cowboys'
@@ -108,20 +112,13 @@ test('pendingFor posts only the latest stage reached and once', () => {
   assert.deepEqual(pendingFor(null, {}), { post: null, skip: [] })
 })
 
-test('eligible respects notBefore', () => {
-  assert.equal(eligible(GID, { notBefore: '2026-10-18' }), true)
-  assert.equal(eligible(GID, { notBefore: '2026-10-20' }), false)
-  assert.equal(eligible(GID, { notBefore: '2026-10-19' }), false)
-  assert.equal(eligible('garbage', { notBefore: '2026-01-01' }), false)
-})
-
 function harness(markets, postResults) {
   const calls = [], saves = []
   const queue = [...postResults]
   return { calls, saves, io: { now: () => 'T', log() {}, markets: async () => markets,
     post: async t => { calls.push(t); return queue.shift() }, save: s => saves.push(JSON.parse(JSON.stringify(s))) } }
 }
-const cfg = { enabled: true, dryRun: false, maxPosts: 3, config: { notBefore: '2026-10-18' } }
+const cfg = { enabled: true, dryRun: false, maxPosts: 3, notBeforeSec: null }
 
 test('a rerun never double-posts', async () => {
   const h = harness([M], [{ ok: true, status: 200, id: '1' }])
@@ -193,4 +190,86 @@ test('oauthHeader is deterministic and never carries a secret', () => {
   assert.equal(h, oauthHeader('POST', 'https://api.x.com/2/tweets',
     { apiKey: 'ck', apiSecret: 'cs', accessToken: 'at', accessTokenSecret: 'ats' }, { nonce: 'n', timestamp: '1' }))
   assert.ok(!/oauth_(consumer_)?secret|"cs"|"ats"/.test(h))
+})
+
+// ---- X_POSTS_NOT_BEFORE: the go-live cutoff ----
+const NOW = 1_792_000_000 // a fixed "now", epoch seconds
+
+test('parseNotBefore: ISO times and UTC dates are read exactly, anything else is an error', () => {
+  assert.equal(parseNotBefore('2026-10-26'), Date.parse('2026-10-26T00:00:00Z') / 1000)
+  assert.equal(parseNotBefore('2026-10-26T00:20:00Z'), Date.parse('2026-10-26T00:20:00Z') / 1000)
+  assert.equal(parseNotBefore('2026-10-25T17:20:00-07:00'), Date.parse('2026-10-26T00:20:00Z') / 1000)
+  assert.equal(parseNotBefore(' 2026-10-26T00:20:00Z '), Date.parse('2026-10-26T00:20:00Z') / 1000)
+  for (const bad of ['2026-10-26 00:20', 'tomorrow', '', '2026-13-45', '10/26/2026', '1792000000', '2026-10-26T00:20:00']) assert.throws(() => parseNotBefore(bad), /X_POSTS_NOT_BEFORE/, bad)
+})
+
+test('live mode fails with a clear error when X_POSTS_NOT_BEFORE is unset; a dry run does not', () => {
+  for (const unset of [undefined, null, '', '   ']) assert.throws(() => requireNotBefore(unset, { live: true }), /X_POSTS_NOT_BEFORE is not set/)
+  for (const unset of [undefined, '']) assert.equal(requireNotBefore(unset, { live: false }), null)
+  assert.equal(requireNotBefore('2026-10-26', { live: true }), parseNotBefore('2026-10-26'))
+  assert.throws(() => requireNotBefore('garbage', { live: false }), /X_POSTS_NOT_BEFORE must be/)
+})
+
+test('the script itself refuses to start live without X_POSTS_NOT_BEFORE, before any network call', () => {
+  const script = fileURLToPath(new URL('./x-posts.mjs', import.meta.url))
+  const env = { PATH: process.env.PATH, X_POSTS_ENABLED: 'true', DRY_RUN: 'false', RPC_URL: 'http://127.0.0.1:9', STATE_FILE: path.join(os.tmpdir(), 'x-posts-test-state.json'),
+    X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_TOKEN_SECRET: 'ts' }
+  const r = spawnSync(process.execPath, [script], { env, encoding: 'utf8', timeout: 20_000 })
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /X_POSTS_NOT_BEFORE is not set/)
+  assert.doesNotMatch(r.stdout + r.stderr, /ECONNREFUSED|fetch failed|HTTP request failed/, 'it failed before touching the RPC')
+  // and with the variable set it gets past that check (then fails on the unreachable RPC, which is fine here)
+  const r2 = spawnSync(process.execPath, [script], { env: { ...env, X_POSTS_NOT_BEFORE: '2026-10-26' }, encoding: 'utf8', timeout: 30_000 })
+  assert.doesNotMatch(r2.stderr, /X_POSTS_NOT_BEFORE is not set/)
+})
+
+test('with the cutoff set to now, an old settled market produces no post (live and dry)', async () => {
+  const oldSettled = { ...M, address: '0xold', stage: 'settled', finalSpread: 7n, eventAt: NOW - 3 * 86400 }
+  for (const c of [{ ...cfg, notBeforeSec: NOW }, { ...cfg, dryRun: true, notBeforeSec: NOW }]) {
+    const h = harness([oldSettled], [])
+    const r = await runOnce({ disabled: null, markets: {} }, h.io, c)
+    assert.deepEqual([r.posted.length, r.wouldPost.length, h.calls.length, h.saves.length], [0, 0, 0, 0])
+  }
+})
+
+test('the cutoff is inclusive, and later events post: closed after it posts, opened before it does not', async () => {
+  const mk = (address, stage, eventAt) => ({ ...M, address, stage, eventAt, finalSpread: 7n })
+  const h = harness([mk('0xa', 'settled', NOW), mk('0xb', 'closed', NOW + 60), mk('0xc', 'opened', NOW - 1), mk('0xd', 'closed', NOW - 86400)],
+    [1, 2, 3].map((i) => ({ ok: true, status: 200, id: String(i) })))
+  const r = await runOnce({ disabled: null, markets: {} }, h.io, { ...cfg, notBeforeSec: NOW })
+  assert.deepEqual(r.posted.map((p) => [p.market, p.event]), [['0xa', 'settled'], ['0xb', 'closed']])
+})
+
+test('an event time that cannot be proven is skipped, never guessed', async () => {
+  const h = harness([{ ...M, address: '0xe', stage: 'opened', eventAt: null }], [])
+  const logs = []
+  h.io.log = (e) => logs.push(e)
+  const r = await runOnce({ disabled: null, markets: {} }, h.io, { ...cfg, dryRun: true, notBeforeSec: NOW })
+  assert.deepEqual([r.posted.length, r.wouldPost.length], [0, 0])
+  assert.deepEqual(logs, ['skipped_event_time_unknown'])
+})
+
+test('without a cutoff (dry run only) nothing is filtered by time', async () => {
+  const h = harness([{ ...M, address: '0xf', stage: 'settled', finalSpread: 7n }], [])
+  const r = await runOnce({ disabled: null, markets: {} }, h.io, { ...cfg, dryRun: true, notBeforeSec: null })
+  assert.equal(r.wouldPost.length, 1)
+})
+
+test('creationTimestamp: binary search for the first block with code, then that block\'s timestamp', async () => {
+  const FIRST = 1234n
+  let calls = 0
+  const pub = { getBlockNumber: async () => 5000n, getCode: async ({ blockNumber }) => { calls++; return blockNumber >= FIRST ? '0x6080' : '0x' },
+    getBlock: async ({ blockNumber }) => ({ timestamp: 1_000_000n + blockNumber }) }
+  assert.equal(await creationTimestamp(pub, '0xabc'), 1_000_000 + 1234)
+  assert.ok(calls <= 16, `used ${calls} getCode calls`)
+  assert.equal(await creationTimestamp({ ...pub, getCode: async () => { throw new Error('state not available') } }, '0xabc'), null)
+  assert.equal(await creationTimestamp({ ...pub, getCode: async () => '0x' }, '0xabc'), null, 'no code even now')
+})
+
+test('a cancelled or refund-mode market is skipped without any event-time noise', async () => {
+  const h = harness([{ ...M, address: '0xg', stage: null }], [])
+  const logs = []
+  h.io.log = (e) => logs.push(e)
+  const r = await runOnce({ disabled: null, markets: {} }, h.io, { ...cfg, dryRun: true, notBeforeSec: NOW })
+  assert.deepEqual([r.posted.length, r.wouldPost.length, logs.length], [0, 0, 0])
 })

@@ -15,7 +15,11 @@
 //                                 posts it would make and never writes state
 //   X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET   posting app, OAuth 1.0a user context
 //   X_MAX_POSTS_PER_RUN           safety cap per run (default 3)
-//   STATE_FILE, CONFIG_FILE       default data/x-posts-state.json, data/x-posts-config.json
+//   X_POSTS_NOT_BEFORE            repo variable: an ISO 8601 time (or a UTC date, YYYY-MM-DD). Any event whose own on-chain
+//                                 time is earlier is skipped: opened = the market's creation block, closed = bettingClosedAt,
+//                                 settled = settledAt. REQUIRED in live mode (the run fails with an error if it is unset);
+//                                 optional in a dry run, where unset means no filter.
+//   STATE_FILE                    default data/x-posts-state.json
 //
 // Any failed post (warning, restriction, rate limit, auth, outage, timeout) disables posting in the
 // state file, records the reason, and fails the run. There is no retry: a human clears `disabled`.
@@ -117,10 +121,44 @@ export function pendingFor(stage, posted = {}) {
   return { post: post === stage ? post : null, skip: todo.filter(e => e !== post) }
 }
 
-/** Pure. Markets older than config.notBefore (a YYYY-MM-DD compared with the gameId's date) are ignored. */
-export function eligible(gameId, config) {
-  const g = parseGameId(gameId)
-  return !!g && g.date >= config.notBefore
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+/** Pure. X_POSTS_NOT_BEFORE as epoch seconds. A bare date is midnight UTC. Anything else is an error, never guessed. */
+export function parseNotBefore(raw) {
+  const v = String(raw ?? '').trim()
+  if (!ISO.test(v) && !DATE_ONLY.test(v)) {
+    throw new Error(`X_POSTS_NOT_BEFORE must be an ISO 8601 time with Z or an offset (2026-10-26T00:00:00Z) or a UTC date (2026-10-26), got "${v}"`)
+  }
+  const ms = Date.parse(DATE_ONLY.test(v) ? `${v}T00:00:00Z` : v)
+  if (Number.isNaN(ms)) throw new Error(`X_POSTS_NOT_BEFORE is not a real date: "${v}"`)
+  return Math.floor(ms / 1000)
+}
+
+/** Pure. Live mode refuses to start without it. Returns epoch seconds, or null (dry run only) for "no filter". */
+export function requireNotBefore(raw, { live }) {
+  const unset = raw === undefined || raw === null || String(raw).trim() === ''
+  if (unset) {
+    if (live) throw new Error('X_POSTS_NOT_BEFORE is not set. Live posting needs this repository variable (a time such as 2026-10-26T00:00:00Z): events before it are never posted. Set it to the go-live time, or run a dry run.')
+    return null
+  }
+  return parseNotBefore(raw)
+}
+
+/**
+ * The block timestamp of a contract's creation, found by binary search over eth_getCode. A market stores no open time, and
+ * the factory creates and opens it in one transaction, so this is when it opened. Returns null when it cannot be proven
+ * (an RPC without historical state throws), and the caller then skips the market rather than guess.
+ */
+export async function creationTimestamp(pub, address) {
+  try {
+    const hasCode = async (n) => { const c = await pub.getCode({ address, blockNumber: n }); return !!c && c !== '0x' }
+    const latest = await pub.getBlockNumber()
+    if (!(await hasCode(latest))) return null
+    let lo = 0n, hi = latest // no code at block 0; code at `latest`
+    while (hi - lo > 1n) { const mid = (lo + hi) / 2n; if (await hasCode(mid)) hi = mid; else lo = mid }
+    return Number((await pub.getBlock({ blockNumber: hi })).timestamp)
+  } catch { return null }
 }
 
 // ── OAuth 1.0a (user context) and the post call ──────────────────────────────
@@ -190,7 +228,12 @@ export async function runOnce(state, io, cfg) {
     return out
   }
   for (const m of await io.markets()) {
-    if (!eligible(m.gameId, cfg.config)) continue
+    if (m.stage === null) continue // cancelled or refund: never posts, so no event time is needed
+    if (cfg.notBeforeSec != null) {
+      // Events earlier than the cutoff never post. An event time that cannot be proven is treated as too early.
+      if (m.eventAt == null) { io.log('skipped_event_time_unknown', { market: m.address, gameId: m.gameId, stage: m.stage }); continue }
+      if (m.eventAt < cfg.notBeforeSec) continue
+    }
     const posted = state.markets[m.address] ?? {}
     const { post, skip } = pendingFor(m.stage, posted)
     if (live) for (const e of skip) {
@@ -221,7 +264,7 @@ export async function runOnce(state, io, cfg) {
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }))
 
-async function chainMarkets(rpcUrl, factory, limit = 25) {
+async function chainMarkets(rpcUrl, factory, { limit = 25, needEventTime = false } = {}) {
   const { createPublicClient, http, parseAbi } = await import('viem')
   const { base } = await import('viem/chains')
   const pub = createPublicClient({ chain: base, transport: http(rpcUrl, { timeout: 60_000 }) })
@@ -231,6 +274,7 @@ async function chainMarkets(rpcUrl, factory, limit = 25) {
     'function settled() view returns (bool)', 'function canceled() view returns (bool)',
     'function refundMode() view returns (bool)', 'function initialZ() view returns (int256)',
     'function currentZ() view returns (int256)', 'function finalSpread() view returns (int256)',
+    'function bettingClosedAt() view returns (uint256)', 'function settledAt() view returns (uint256)',
   ])
   const all = await pub.readContract({ address: factory, abi, functionName: 'getAllMarkets' })
   const out = []
@@ -244,6 +288,12 @@ async function chainMarkets(rpcUrl, factory, limit = 25) {
       const [initialZ, currentZ] = await Promise.all(['initialZ', 'currentZ'].map(r))
       Object.assign(m, { initialZ, currentZ })
       if (stage === 'settled') m.finalSpread = await r('finalSpread')
+      if (needEventTime) {
+        // The time of the event this stage would post about, from the chain itself.
+        if (stage === 'settled') m.eventAt = Number(await r('settledAt'))
+        else if (stage === 'closed') m.eventAt = Number(await r('bettingClosedAt'))
+        else m.eventAt = await creationTimestamp(pub, address)
+      }
     }
     out.push(m)
   }
@@ -253,17 +303,16 @@ async function chainMarkets(rpcUrl, factory, limit = 25) {
 async function main() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   const stateFile = process.env.STATE_FILE || path.join(root, 'data/x-posts-state.json')
-  const config = JSON.parse(fs.readFileSync(process.env.CONFIG_FILE || path.join(root, 'data/x-posts-config.json'), 'utf8'))
-  const cfg = {
-    enabled: process.env.X_POSTS_ENABLED === 'true',
-    dryRun: process.env.DRY_RUN !== 'false',
-    maxPosts: Number(process.env.X_MAX_POSTS_PER_RUN || 3),
-    config,
-  }
+  const enabled = process.env.X_POSTS_ENABLED === 'true', dryRun = process.env.DRY_RUN !== 'false'
+  const live = enabled && !dryRun
+  // Checked first, before any network call: a live run without a cutoff must not start.
+  const notBeforeSec = requireNotBefore(process.env.X_POSTS_NOT_BEFORE, { live })
+  const cfg = { enabled, dryRun, maxPosts: Number(process.env.X_MAX_POSTS_PER_RUN || 3), notBeforeSec }
   if (!process.env.RPC_URL) throw new Error('RPC_URL is not set')
   const state = loadState(stateFile)
-  const live = cfg.enabled && !cfg.dryRun
-  log('start', { mode: live ? 'LIVE' : 'dry-run', X_POSTS_ENABLED: cfg.enabled, DRY_RUN: cfg.dryRun })
+  log('start', { mode: live ? 'LIVE' : 'dry-run', X_POSTS_ENABLED: cfg.enabled, DRY_RUN: cfg.dryRun,
+                 notBefore: notBeforeSec == null ? null : new Date(notBeforeSec * 1000).toISOString() })
+  if (notBeforeSec == null) log('warning_no_cutoff', { detail: 'X_POSTS_NOT_BEFORE is unset: nothing is filtered by time in this dry run, and a live run would refuse to start' })
 
   let creds = null
   if (live) {
@@ -276,7 +325,7 @@ async function main() {
   const io = {
     now: () => new Date().toISOString(),
     log,
-    markets: () => chainMarkets(process.env.RPC_URL, process.env.FACTORY_ADDRESS || V1_6_FACTORY),
+    markets: () => chainMarkets(process.env.RPC_URL, process.env.FACTORY_ADDRESS || V1_6_FACTORY, { needEventTime: notBeforeSec != null }),
     post: text => postToX(text, creds),
     save: s => saveState(stateFile, s),
   }
