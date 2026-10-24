@@ -14,7 +14,7 @@ Nothing here is run by Code. It moves 1.02 USDC from the Bankr wallet, so Jeff r
 ## Steps
 
 1. `node scripts/even-steven.bundle.mjs markets` and `odds "<game>" --stake 1`. Both are free chain reads. Record the line.
-2. `node scripts/even-steven.bundle.mjs bet --prepare "<game>" <home|away|team> 1`. Check the text: even money, the early line, flat 2% fee on the stake paid upfront, total **1.02 USDC**, "Reply confirm." Note the intent id.
+2. `node scripts/even-steven.bundle.mjs bet --prepare "<game>" <home|away|team> 1`. Check the text: even money, the line (it locks when the bet lands), flat 2% fee on the stake paid upfront, total **1.02 USDC**, "Reply confirm." Note the intent id.
 3. Reply `confirm`, then `node scripts/even-steven.bundle.mjs bet --confirm <intent-id>`.
 4. Record the output: "Bet placed", the locked line, the bet id, the transaction link.
 5. `node scripts/even-steven.bundle.mjs status "<game>"` and confirm the bet appears with the same locked line.

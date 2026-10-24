@@ -5,7 +5,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-const APPROVED_PITCH = 'Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.'
+const APPROVED_PITCH = 'Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.'
 const APPROVED_SENTENCE_1 = 'Back either side at even money. The spread moves to balance the pool, so $100 wins $100.'
 export const APPROVED = [APPROVED_PITCH, APPROVED_SENTENCE_1]
 
@@ -18,6 +18,9 @@ export const FORBIDDEN = [
   ['make more', /\bmake more\b/i], ['airdrop', /airdrop/i], ['half', /\bhalf\b/i], ['em dash', /—/],
   // Builder-code contact wording is fixed: "To ask about a builder code, email ... Jeff approves each one." These older phrasings must not return in any file.
   ['ask for a builder code', /ask for a builder code/i], ['Even Steven approves each builder', /even steven approves each builder/i],
+  // Wording that promises an edge for acting early. The line locks when the bet lands; the copy says only that.
+  ['lock a better', /lock a better/i], ['better spread', /better spread/i], ['better line', /better line/i], ['early bettors', /early bettors/i],
+  ['get in early', /get in early/i], ['always free', /always free/i],
 ]
 // "audited" is only allowed right before ", not a formal third-party audit" or right after "five internal audit rounds".
 const AUDITED = /audited/i

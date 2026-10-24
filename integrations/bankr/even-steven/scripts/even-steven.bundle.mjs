@@ -19627,7 +19627,7 @@ USDC on Base: ${usd(bal)}`);
     });
     const pct = Number(feeBps) / 100;
     if (compact) {
-      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away)} (${m.home} v ${m.away}), from ${shortAddr(wallet)}. Even money: a balanced pool pays even money. Early line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`);
+      out(`Bet ${usd(stake)} USDC on ${lineSentence(m.z, s.side, m.home, m.away)} (${m.home} v ${m.away}), from ${shortAddr(wallet)}. Even money: a balanced pool pays even money. Line: it locks when your bet lands. Flat ${pct}% fee on stake, paid upfront: total ${usd(total)} USDC. ID ${id}.`);
       out("Reply confirm.");
       return 0;
     }
@@ -19636,7 +19636,7 @@ USDC on Base: ${usd(bal)}`);
     out(`From wallet: ${shortAddr(wallet)}`);
     out(`Your pick: ${lineSentence(m.z, s.side, m.home, m.away)}`);
     out("1. Even money: back either side at even money. The spread moves to balance the pool, and a balanced pool pays even money. Your payout is set at settlement from the final pool.");
-    out(`2. The early line: this line locks when your bet lands and never changes. Later bets move the line for later bettors. Current line: ${favoriteHeadline(m.z, m.home, m.away)}.`);
+    out(`2. The line: it locks when your bet lands. Current line: ${favoriteHeadline(m.z, m.home, m.away)}.`);
     out(`3. Cost: a flat ${pct}% fee on your stake, paid upfront. Stake ${usd(stake)} USDC + fee ${usd(fee)} USDC = total ${usd(total)} USDC from your Bankr wallet.`);
     out(`Intent id: ${id} (valid for 5 minutes)`);
     out("Reply confirm.");
@@ -19703,7 +19703,7 @@ USDC on Base: ${usd(bal)}`);
       return;
     }
     out(`Bet placed. ${lineSentence(z, intent.side, mk.home, mk.away)}`);
-    out(`Your line locked at ${body.lockedZDisplay ?? Number(z) / 1e4} and does not change; later bets move the line for later bettors.`);
+    out(`Your line locked at ${body.lockedZDisplay ?? Number(z) / 1e4} when your bet landed.`);
     out(`Stake ${usd(intent.stake)} USDC + fee ${usd(body.fee ?? intent.fee)} USDC, from wallet ${shortAddr(intent.wallet)}. Your payout is set at settlement from the final pool.`);
     out(`Bet id ${body.betId}. Transaction: ${BASESCAN}/tx/${body.txHash}`);
   }

@@ -14,7 +14,7 @@ metadata:
 
 # Even Steven
 
-Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
+Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
 Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are in USDC. The Bankr wallet signs and Even Steven's relay pays the gas. USDC moves straight from the wallet to the market contract, and the relay never holds it.
 
@@ -68,7 +68,7 @@ Agent: node scripts/even-steven.bundle.mjs bet --confirm <intent-id>
        (relay the script's output: the locked line and the transaction link)
 ```
 
-The confirmation text follows this order: even money, the early line (the line locks when the bet lands and never changes), then a flat 2% fee on the stake, paid upfront, and the total cost. Do not reword it into a promise.
+The confirmation text follows this order: even money, the line (it locks when the bet lands), then a flat 2% fee on the stake, paid upfront, and the total cost. Do not reword it into a promise.
 
 If `--confirm` prints "Bankr refused to sign (HTTP 403)", relay the body and the explanation: this Bankr key restricts typed-data signing (for example Trusted Addresses are set, or the key is read-only), and the wallet owner needs a key with Wallet API on, Read Only off and Trusted Addresses empty.
 

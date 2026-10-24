@@ -30,7 +30,9 @@ test('copy lint rules: every forbidden term is caught', () => {
     'no house advantage': 'no house advantage', 'no house margin': 'no house margin', 'at liquidity': 'pays 2x at liquidity', 'liquid market': 'a liquid market', 'balanced market': 'a balanced market',
     'mature market': 'a mature market', 'Z line': 'the Z line moves', oracleZ: 'set oracleZ', lockedZ: 'your lockedZ', guaranteed: 'guaranteed win', alpha: 'real alpha', 'make more': 'helps you make more',
     airdrop: 'an airdrop', half: 'half the pool', 'em dash': 'one — two',
-    'ask for a builder code': 'To ask for a builder code, email us.', 'Even Steven approves each builder': 'Even Steven approves each builder.' }
+    'ask for a builder code': 'To ask for a builder code, email us.', 'Even Steven approves each builder': 'Even Steven approves each builder.',
+    'lock a better': 'lock a better price', 'better spread': 'a better spread than the crowd', 'better line': 'you get a better line', 'early bettors': 'early bettors win',
+    'get in early': 'Get in early.', 'always free': 'it is always free' }
   for (const [name] of FORBIDDEN) { assert.ok(samples[name], 'sample for ' + name); assert.ok(hits(samples[name]).includes(name), name + ' not caught in: ' + samples[name]) }
 })
 test('copy lint rules: the old builder-contact wording is rejected in every file, and the approved line is not', () => {
@@ -39,6 +41,14 @@ test('copy lint rules: the old builder-contact wording is rejected in every file
   assert.ok(FORBIDDEN.some(([n]) => n === 'ask for a builder code') && FORBIDDEN.some(([n]) => n === 'Even Steven approves each builder'), 'in the all-files list, not only the bettor-facing one')
   assert.deepEqual(hits('To ask about a builder code, email evenstevenbet@gmail.com. Jeff approves each one.'), [])
   for (const f of userFacing(dir)) assert.ok(!/ask for a builder code|even steven approves each builder/i.test(f.text), f.label + ' still has the old wording')
+})
+test('copy lint rules: the nine promise phrases are rejected in any casing, in every file type', () => {
+  const phrases = ['lock a better', 'better spread', 'better line', 'early bettors', 'get in early', 'settlement fee', '4% friction', 'guaranteed', 'always free']
+  for (const phrase of phrases) for (const text of [phrase, phrase.toUpperCase(), `Intro. ${phrase[0].toUpperCase()}${phrase.slice(1)}, and more.`]) for (const opts of [{}, { bettorFacing: true }]) {
+    assert.ok(hits(text, opts).some((r) => r === phrase), `${phrase} not caught in: ${text}`)
+  }
+  assert.deepEqual(hits('The line locks when your bet lands. Later bets can move the line for later bets.'), [], 'the plain lock wording is allowed')
+  for (const f of userFacing(dir)) for (const phrase of phrases) assert.ok(!new RegExp(phrase, 'i').test(f.text), `${f.label} contains "${phrase}"`)
 })
 test('copy lint rules: near misses are not flagged', () => {
   assert.deepEqual(hits('on behalf of someone; alphabet; a half-court shot is not here'.replace('half-court', 'halftime')), [])
