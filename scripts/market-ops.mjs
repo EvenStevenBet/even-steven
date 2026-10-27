@@ -33,7 +33,8 @@ const USDC   = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 // wallet() further requires the key to be THIS market's owner() on chain.
 const OWNERS = [
   '0x6cF0A0b5282409E24dC35e2c1834f9111315603B', // Factory v1.5 era
-  '0x2e5Ff49699f0dA2E8A6a43f34BffC1c740E67916', // v3 owner, Factory v1.6
+  '0x2e5Ff49699f0dA2E8A6a43f34BffC1c740E67916', // v3 owner, Factory v1.6 (retired 2026-10-27; still owns the 9 markets it created)
+  '0x28953e3FCCfC0Ae1c4d5899c795Df41667c5B336', // v4 owner, Factory v1.6 (from 2026-10-27)
 ].map(a => getAddress(a))
 /**
  * RPC selection, in order: MAINNET_RPC > ALCHEMY_RPC_URL > ALCHEMY_KEY > public.
