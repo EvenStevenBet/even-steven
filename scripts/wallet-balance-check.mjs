@@ -20,7 +20,7 @@ import { resolveRelayAddress } from './relay-address.mjs'
 // The relay address comes from config (see relay-address.mjs), so a relay rotation never edits this file.
 export const walletsFor = (relayAddress) => [
   { name: 'relay', address: relayAddress, env: 'RELAY_MIN_BALANCE_ETH', fallback: '0.0021' },
-  { name: 'owner', address: '0x2e5Ff49699f0dA2E8A6a43f34BffC1c740E67916', env: 'OWNER_MIN_BALANCE_ETH', fallback: '0.0003' },
+  { name: 'owner', address: '0x28953e3FCCfC0Ae1c4d5899c795Df41667c5B336', env: 'OWNER_MIN_BALANCE_ETH', fallback: '0.0003' },
 ]
 
 /** Pure: which wallets are under their threshold. */
