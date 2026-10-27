@@ -16,7 +16,7 @@
  *   zero     = tie
  * For NFL-2026-09-17-HOME-Bills-AWAY-Lions that is (Bills score - Lions score).
  */
-import fs from 'fs'; import path from 'path'; import { fileURLToPath } from 'url'
+import fs from 'fs'; import os from 'os'; import path from 'path'; import { fileURLToPath } from 'url'
 import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, formatEther,
          getAddress, parseEventLogs } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -93,9 +93,22 @@ const E = parseAbi(['function balanceOf(address) view returns (uint256)',
 
 const r = (fn, args) => pub.readContract({ address: MARKET, abi: M, functionName: fn, args })
 
+/**
+ * The owner key: PRIVATE_KEY from ~/.even-steven/bot.env (outside the iCloud-synced tree, same file the
+ * opener bot uses), else MAINNET_PRIVATE_KEY from the environment. Read into a local, never into process.env,
+ * and never printed.
+ */
+function ownerKey() {
+  try {
+    const k = (dotenv.parse(fs.readFileSync(path.join(os.homedir(), '.even-steven', 'bot.env'))).PRIVATE_KEY || '').trim()
+    if (k) return k
+  } catch { /* no bot.env: fall back */ }
+  return (process.env.MAINNET_PRIVATE_KEY || '').trim()
+}
+
 async function wallet() {
-  const k = (process.env.MAINNET_PRIVATE_KEY || '').trim()
-  if (!k) die('MAINNET_PRIVATE_KEY not set')
+  const k = ownerKey()
+  if (!k) die('no owner key: set PRIVATE_KEY in ~/.even-steven/bot.env (or MAINNET_PRIVATE_KEY in the environment)')
   const a = privateKeyToAccount(k)
   const signer = getAddress(a.address)
   if (!OWNERS.includes(signer)) die(`key derives ${signer}, which is not a known owner wallet`)
