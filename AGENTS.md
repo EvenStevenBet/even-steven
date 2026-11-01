@@ -313,7 +313,7 @@ Points are a scoreboard. Bettors earn 100 points per USDC staked, win or lose. A
 
 #### Even Steven's own Base builder code
 
-Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base builder code `bc_ncytgilx` as an ERC-8021 schema-0 calldata suffix, for Base's attribution. It earns partners nothing and does not change the bet.
+Every relayed transaction (bets and `claimPayoutFor` claims) carries Even Steven's own Base builder code `bc_2wk26wh0` as an ERC-8021 schema-0 calldata suffix, for Base's attribution. It earns partners nothing and does not change the bet. Transactions before the swap carry the earlier code `bc_ncytgilx`; neither code is ever a referrer, so neither earns points or a fee share.
 
 **Why the nonce is derived, not random.** The signature covers `from`, `to`, `value`,
 `validAfter`, `validBefore` and `nonce` — but not which side you are betting. With a random

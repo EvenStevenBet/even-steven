@@ -1,7 +1,7 @@
 // node --test scripts/points.test.mjs
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computePoints } from './points.mjs'
+import { computePoints, isOwnBuilderCode } from './points.mjs'
 
 const M = '0x1111111111111111111111111111111111111111'
 const alice = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -48,8 +48,19 @@ test('fractional stakes floor per bet', () => {
   assert.equal(computePoints(bets, [], rates)[0].betPoints, 123)
 })
 
-test('Even Steven\'s own builder code never earns referral points', () => {
+test('Even Steven\'s own builder codes, current and legacy, never earn referral points', () => {
   const bets = [{ marketAddress: M, betId: 0n, bettor: alice, stake: 1_000_000n }]
-  const records = [{ marketAddress: M, betId: '0', ref: 'bc_ncytgilx', refAddress: carol, stake: '1000000' }]
-  assert.deepEqual(computePoints(bets, records, rates).map((r) => r.address), [alice])
+  for (const code of ['bc_2wk26wh0', 'BC_2WK26WH0', 'bc_ncytgilx', 'Bc_NcYtGiLx']) {
+    const records = [{ marketAddress: M, betId: '0', ref: code, refAddress: carol, stake: '1000000' }]
+    assert.deepEqual(computePoints(bets, records, rates).map((r) => r.address), [alice], code)
+  }
+})
+
+test('neither Even Steven code earns a fee share either: a third-party ref still counts next to them', () => {
+  const bets = [{ marketAddress: M, betId: 0n, bettor: alice, stake: 1_000_000n }]
+  const records = [{ marketAddress: M, betId: '0', ref: 'alice-picks', refAddress: carol, stake: '1000000' }]
+  assert.equal(computePoints(bets, records, rates).find((r) => r.address === carol).referralPoints, 50)
+  assert.equal(isOwnBuilderCode('bc_2wk26wh0'), true)
+  assert.equal(isOwnBuilderCode('bc_ncytgilx'), true)
+  assert.equal(isOwnBuilderCode('alice-picks'), false)
 })

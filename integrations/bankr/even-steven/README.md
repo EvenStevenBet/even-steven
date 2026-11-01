@@ -31,9 +31,10 @@ The script sends no `ref` by default. A single optional setting, `ES_REF`, adds 
 to every relayed bet from that install. It is unset by default and is for an approved builder's own
 channel. The relay ignores an unknown or malformed value and still places the bet.
 
-Every transaction the relay sends carries Even Steven's own Base builder code `bc_ncytgilx` as an
+Every transaction the relay sends carries Even Steven's own Base builder code `bc_2wk26wh0` as an
 ERC-8021 schema-0 calldata suffix, for Base's attribution. It earns partners nothing and does not
-change the bet.
+change the bet. Transactions before the swap carry the earlier code `bc_ncytgilx`; neither code is
+ever a referrer.
 
 ## Points
 

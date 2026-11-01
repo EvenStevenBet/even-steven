@@ -26,7 +26,7 @@ Nothing here is run by Code. It moves 1.02 USDC from the Bankr wallet, so Jeff r
 |---|---|---|
 | 1 | The relay answered 200 and the script printed "Bet placed" | script output |
 | 2 | `BetPlaced.bettor` is the Bankr wallet | BaseScan: the tx's logs, `BetPlaced(bettor, betId, stake, fee, greaterThan, lockedZ)`; or `status` |
-| 3 | The calldata ends with the Even Steven builder-code suffix | BaseScan: Input Data, view original. It must end with `62635f6e63797467696c78` `0b` `00` `80218021802180218021802180218021` (that is `bc_ncytgilx`, length 11, schema 0, the ERC-8021 marker) |
+| 3 | The calldata ends with the Even Steven builder-code suffix | BaseScan: Input Data, view original. It must end with `62635f32776b3236776830` `0b` `00` `80218021802180218021802180218021` (that is `bc_2wk26wh0`, length 11, schema 0, the ERC-8021 marker; transactions sent before the swap end in `62635f6e63797467696c78` for `bc_ncytgilx` instead) |
 | 4 | No USDC touched the relay | BaseScan: the tx's token transfers show only wallet to market (1.02 USDC) and market to owner (the 0.02 USDC fee); no transfer to or from `0x8a3e…ed`; relay USDC balance still 0 |
 | 5 | The wallet paid exactly stake + fee | wallet balance fell by exactly 1.02 USDC |
 | 6 | The locked line equals the line shown at prepare (or a later line if bets landed in between) | script output vs `markets` |
