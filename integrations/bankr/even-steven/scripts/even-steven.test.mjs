@@ -613,6 +613,10 @@ test('bundle: the committed even-steven.bundle.mjs is current with the source', 
   const { bundle, OUT } = await import('./build.mjs')
   assert.equal(fs.readFileSync(OUT, 'utf8'), await bundle(), 'run `npm run build` and commit the bundle')
 })
+test('bundle: no local paths leak in (no /Users/, /home/ or Desktop), so it is built from a local node_modules', () => {
+  const b = fs.readFileSync(fileURLToPath(new URL('./even-steven.bundle.mjs', import.meta.url)), 'utf8')
+  for (const bad of ['/Users/', '/home/', 'Desktop']) assert.ok(!b.includes(bad), `bundle contains "${bad}"`)
+})
 test('bundle: imports nothing but node built-ins, so it needs no node_modules', () => {
   const src = fs.readFileSync(fileURLToPath(new URL('./even-steven.bundle.mjs', import.meta.url)), 'utf8')
   const specs = [...src.matchAll(/^\s*(?:import|export)\s[^'"\n]*?from\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
