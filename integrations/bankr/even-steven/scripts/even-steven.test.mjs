@@ -539,6 +539,10 @@ test('key precedence: BANKR_API_KEY first, then the config file, then no header'
   assert.equal(await hdr({ BANKR_API_KEY: 'bk_FROM_ENV_stand_in' }, false), 'bk_FROM_ENV_stand_in')   // env alone
   assert.equal(await hdr({}, false), undefined)                                                       // nothing: no header at all
 })
+test('a config file that is not valid JSON fails with a plain message that never quotes the file', async () => {
+  const s = setup({}); fs.writeFileSync(path.join(s.dir, 'config.json'), '{"apiKey": "bk_SECRET_LEAK_CHECK" oops')
+  assert.equal(await s.cli.run(['wallet']), 1); assert.match(txt(s.cli), /is not valid JSON/); assert.ok(!txt(s.cli).includes('bk_SECRET_LEAK_CHECK'))
+})
 test('wallet: prints the address (full and short) and the USDC balance, read-only', async () => {
   const s = setup({ world: { usdc: 12_340_000n } })
   assert.equal(await s.cli.run(['wallet']), 0); assert.match(txt(s.cli), new RegExp(wallet.address)); assert.ok(txt(s.cli).includes(short(wallet.address))); assert.match(txt(s.cli), /USDC on Base: 12\.34/)
@@ -648,6 +652,8 @@ test('packaging: SKILL.md frontmatter parses as YAML in the same shape as bankr/
   assert.deepEqual(Object.keys(fm.metadata), ['clawdbot'])
   assert.deepEqual(Object.keys(fm.metadata.clawdbot), ['emoji', 'homepage', 'requires'])
   assert.equal(fm.metadata.clawdbot.homepage, 'https://evensteven.bet'); assert.deepEqual(fm.metadata.clawdbot.requires, { bins: ['node'] })
+  // no requires.config / requires.env: a host-side config check would block the skill where the host attaches the key itself
+  assert.deepEqual(Object.keys(fm.metadata.clawdbot.requires), ['bins'], 'requires lists bins only, no config or env check'); assert.equal(fm.metadata.clawdbot.requires.config, undefined)
   // same block layout as agenticbets (JSON-style flow mapping under metadata:)
   assert.match(text, /metadata:\n  \{\n    "clawdbot":\n      \{\n        "emoji": ".+",\n        "homepage": "https:\/\/evensteven\.bet",\n        "requires": \{ "bins": \["node"\] \},\n      \},\n  \}\n---\n/)
 })

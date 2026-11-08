@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Even Steven skill for Bankr agents. Non-custodial: the Bankr wallet signs a USDC
+// Even Steven skill for Bankr agents. Even Steven never holds funds (Bankr holds the wallet keys): the Bankr wallet signs a USDC
 // ReceiveWithAuthorization through POST /wallet/sign, Even Steven's relay submits it and pays the
 // gas, and USDC moves straight from the bettor to the market. This script never submits a
 // transaction itself and never calls /wallet/submit, /wallet/transfer or /wallet/swap.
@@ -277,8 +277,10 @@ export function createCli(deps = {}) {
     if (apiKey !== null) return apiKey || null
     if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY
     else if (fs.existsSync(configPath)) {
-      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-      apiKey = cfg.apiKey || cfg.api_key || ''
+      let cfg
+      // JSON.parse errors quote the start of the text, which would put the key on screen, so never pass them on.
+      try { cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')) } catch { throw new UserError(`${configPath} is not valid JSON. It should look like {"apiKey": "..."}.`) }
+      apiKey = (cfg && (cfg.apiKey || cfg.api_key)) || ''
       if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`)
     } else apiKey = ''
     return apiKey || null
