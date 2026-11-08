@@ -19446,8 +19446,13 @@ function createCli(deps = {}) {
     if (apiKey !== null) return apiKey || null;
     if (env.BANKR_API_KEY) apiKey = env.BANKR_API_KEY;
     else if (fs.existsSync(configPath)) {
-      const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      apiKey = cfg.apiKey || cfg.api_key || "";
+      let cfg;
+      try {
+        cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      } catch {
+        throw new UserError(`${configPath} is not valid JSON. It should look like {"apiKey": "..."}.`);
+      }
+      apiKey = cfg && (cfg.apiKey || cfg.api_key) || "";
       if (!apiKey) throw new UserError(`No apiKey in ${configPath}.`);
     } else apiKey = "";
     return apiKey || null;
