@@ -1,9 +1,9 @@
 {
-  "updatedAt": "2026-10-29T20:11:32.537Z",
+  "updatedAt": "2026-11-08T15:00:00.781Z",
   "pointsPerUsdc": 100,
   "refPointsPerUsdc": 50,
   "factory": "0x5906370b9831728ec523b647137a1bbf0ab45390",
-  "markets": 10,
+  "markets": 11,
   "bets": 19,
   "addresses": [
     {
