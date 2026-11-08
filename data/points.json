@@ -1,21 +1,21 @@
 {
-  "updatedAt": "2026-11-08T15:00:00.781Z",
+  "updatedAt": "2026-11-08T23:37:49.133Z",
   "pointsPerUsdc": 100,
   "refPointsPerUsdc": 50,
   "factory": "0x5906370b9831728ec523b647137a1bbf0ab45390",
-  "markets": 11,
-  "bets": 19,
+  "markets": 12,
+  "bets": 22,
   "addresses": [
     {
       "address": "0x1164a458a716289c3d724fd1b3a8f5072593271e",
-      "total": 11300,
-      "betPoints": 11300,
+      "total": 11500,
+      "betPoints": 11500,
       "referralPoints": 0
     },
     {
       "address": "0x37174ed1221f692867d7150a6b59b5623ac56c2b",
-      "total": 200,
-      "betPoints": 200,
+      "total": 300,
+      "betPoints": 300,
       "referralPoints": 0
     },
     {
