@@ -1,0 +1,53 @@
+name: X lead search
+# Read-only X recent search (GET /2/tweets/search/recent, app-only Bearer Token) → one tab per day in the Google Sheet
+# "ES - X Search". Queries come from the reviewed file data/x-search-queries.json.
+# Nothing live happens until Jeff says so:
+#   - a scheduled run is live only if the repository variable X_SEARCH_ENABLED is exactly "true"; otherwise it is a dry run
+#   - a manual run is a dry run (fixture, no X call, no Google call) unless dry_run is unticked
+#   - a manual live run is limited to max_queries / max_posts_per_query (default 1 query, 10 posts: the first live run)
+# GitHub's cron can fire late or not at all; this is a daily backstop, not a precise clock.
+on:
+  schedule:
+    - cron: '30 13 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run against the fixture: no X call, no Google call, nothing written'
+        type: boolean
+        default: true
+      max_queries:
+        description: 'Run at most this many queries (manual runs only)'
+        type: string
+        default: '1'
+      max_posts_per_query:
+        description: 'Posts per query, 10-100 (manual runs only)'
+        type: string
+        default: '10'
+
+concurrency:
+  group: x-search
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  search:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+      - run: node --test scripts/x-search.test.mjs
+      - run: node scripts/x-search.mjs
+        env:
+          DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && !inputs.dry_run) || (github.event_name == 'schedule' && vars.X_SEARCH_ENABLED == 'true')) && 'false' || 'true' }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          X_SEARCH_SHEET_ID: ${{ vars.X_SEARCH_SHEET_ID }}
+          # Caps are Jeff's to set; unset falls back to the values in data/x-search-queries.json.
+          X_SEARCH_DAILY_CAP_USD: ${{ vars.X_SEARCH_DAILY_CAP_USD }}
+          X_SEARCH_MONTHLY_CAP_USD: ${{ vars.X_SEARCH_MONTHLY_CAP_USD }}
+          X_SEARCH_MAX_QUERIES: ${{ github.event_name == 'workflow_dispatch' && inputs.max_queries || '' }}
+          X_SEARCH_MAX_POSTS_PER_QUERY: ${{ github.event_name == 'workflow_dispatch' && inputs.max_posts_per_query || '' }}
