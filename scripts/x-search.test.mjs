@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { xSearch } from './x-search-client.mjs'
-import { applyEnv, buildQuery, cell, estimateMicro, fixtureSearch, googleStore, memoryStore, planRequest, processResponse, requireSecrets, runJob, validateConfig, toMicro } from './x-search.mjs'
+import { applyEnv, buildQuery, cell, estimateMicro, expiredTabs, fixtureSearch, googleStore, memoryStore, planRequest, processResponse, requireSecrets, runJob, validateConfig, toMicro } from './x-search.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
@@ -247,4 +247,75 @@ test('the workflow is a dry run unless explicitly made live, and the first manua
   assert.match(wf, /dry_run:[\s\S]*?default: true/)
   assert.match(wf, /max_queries:[\s\S]*?default: '1'/)
   assert.match(wf, /max_posts_per_query:[\s\S]*?default: '10'/)
+})
+
+// ── Retention: stored post text must not outlive 7 days ──────────────────────
+
+const TABS = ['_state', '_runs', 'Sheet1', 'Notes', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-17', '2026-11-18', '2026-11-1', '2026-11-10 copy', '2026-13-40', '2026-11-03']
+
+test('expiredTabs: only exact YYYY-MM-DD tabs strictly older than 7 days; the 7-day-old tab is kept', () => {
+  // today 2026-11-17: cutoff is 2026-11-10, which is kept; 2026-11-09 and 2026-11-03 go
+  assert.deepEqual(expiredTabs(TABS, '2026-11-17').sort(), ['2026-11-03', '2026-11-09'])
+  assert.deepEqual(expiredTabs(['2026-11-10'], '2026-11-17'), [])
+  assert.deepEqual(expiredTabs(['2026-11-09'], '2026-11-17'), ['2026-11-09'])
+})
+
+test('expiredTabs never returns _state, _runs, other names, malformed or impossible dates, or future dates', () => {
+  const out = expiredTabs(TABS, '2026-11-17')
+  for (const keep of ['_state', '_runs', 'Sheet1', 'Notes', '2026-11-1', '2026-11-10 copy', '2026-13-40', '2026-11-18', '2026-11-17']) assert.ok(!out.includes(keep), keep)
+})
+
+test('a live run deletes old day tabs after writing and leaves every other tab', async () => {
+  const store = memoryStore({ existingTabs: TABS })
+  const lines = []; const orig = console.log; console.log = l => lines.push(l)
+  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'live' })
+  console.log = orig
+  assert.deepEqual(store.deletedTabs.sort(), ['2026-11-03', '2026-11-09'])
+  for (const t of TABS.filter(t => !['2026-11-03', '2026-11-09'].includes(t))) assert.ok(store.tabs.has(t), t)
+  assert.deepEqual(JSON.parse(lines.at(-1)).tabsDeleted.sort(), ['2026-11-03', '2026-11-09'])
+})
+
+test('a dry run deletes nothing and logs what it would delete', async () => {
+  const store = memoryStore({ existingTabs: TABS })
+  const lines = []; const orig = console.log; console.log = l => lines.push(l)
+  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'dry-run' })
+  console.log = orig
+  assert.deepEqual(store.deletedTabs, [])
+  for (const t of TABS) assert.ok(store.tabs.has(t), t)
+  const s = JSON.parse(lines.at(-1))
+  assert.deepEqual(s.tabsWouldDelete.sort(), ['2026-11-03', '2026-11-09'])
+  assert.deepEqual(s.tabsDeleted, [])
+})
+
+test('retention does not run when the write failed', async () => {
+  const store = memoryStore({ existingTabs: TABS })
+  store.appendRows = async () => { throw new Error('sheet down') }
+  const orig = console.log; console.log = () => {}
+  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'live' })
+  console.log = orig
+  assert.deepEqual(store.deletedTabs, [])
+})
+
+test('Google store: deleting sends deleteSheet only for the exact day tabs asked for, via the Sheets API', async () => {
+  const calls = []
+  const origFetch = globalThis.fetch
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const sa = { client_email: 'sa@example.iam', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) }
+  const sheets = [['_state', 1], ['_runs', 2], ['Notes', 3], ['2026-11-09', 4], ['2026-11-17', 5]].map(([title, sheetId]) => ({ properties: { sheetId, title, hidden: title === '_state' } }))
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url); calls.push({ url: u, method: init.method ?? 'GET', body: init.body })
+    const json = o => ({ ok: true, status: 200, json: async () => o, text: async () => JSON.stringify(o) })
+    if (u.includes('oauth2.googleapis.com')) return json({ access_token: 'g' })
+    if (u.includes('fields=sheets.properties')) return json({ sheets })
+    return json({})
+  }
+  try {
+    const store = await googleStore({ sa, sheetId: 'abcdefghijklmnopqrstuvwxyz' })
+    assert.deepEqual(expiredTabs(await store.listTabTitles(), '2026-11-17'), ['2026-11-09'])
+    await store.deleteTabs(['2026-11-09', '_state', 'Notes'])  // the guard drops the two that are not day tabs
+  } finally { globalThis.fetch = origFetch }
+  const del = calls.filter(c => String(c.body ?? '').includes('deleteSheet'))
+  assert.equal(del.length, 1)
+  assert.deepEqual(JSON.parse(del[0].body).requests, [{ deleteSheet: { sheetId: 4 } }])
+  assert.ok(calls.every(c => c.url.startsWith('https://sheets.googleapis.com/') || c.url.includes('oauth2.googleapis.com')))
 })

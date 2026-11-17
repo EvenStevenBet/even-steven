@@ -23,6 +23,10 @@ Read-only daily search of X recent posts for lead research. Writes one tab per d
 - `_state` (hidden): `since` per query and `seen` post ids (kept 8 days). Advanced only after rows are written.
 - `_runs`: one row per run: time, date, mode, queries run, post reads, user reads, est. USD, day total, month-to-date, stop reason.
 
+## Data retention
+
+Every live run, after writing, deletes daily tabs whose exact `YYYY-MM-DD` name is more than 7 days old (a 7-day-old tab is kept), so post text and links are stored for at most 7 days. `_state`, `_runs` and any other tab are never touched. A dry run deletes nothing and logs what it would delete. The job keeps no post text beyond that: only one `since_id` per query and the post ids seen in the last 8 days (for dedupe) live on in `_state`. It stores no off-X data about the people in the posts.
+
 ## Cost model
 
 $0.005 per post read, $0.010 per user read (docs.x.com pricing, checked 2026-11-15). Each request is sized so that,

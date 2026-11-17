@@ -170,6 +170,7 @@ export async function runJob({ cfg, search, store, date, mode, now = () => new D
   const runMicro = estimateMicro(posts, users)
   const today = date
   let written = false
+  const retention = { deleted: [], wouldDelete: [] }
   try {
     if (rows.length > 0) await store.appendRows(date, rows)
     written = true
@@ -179,13 +180,19 @@ export async function runJob({ cfg, search, store, date, mode, now = () => new D
     for (const [id, d] of seenDays) if (d >= cutoff) keep.set(id, d)
     for (const id of seen) if (!keep.has(id)) keep.set(id, today)
     await store.saveState({ since: newSince, seen: keep })
+    // Retention (X Developer Policy: stored post content must stay current). Only after a good write.
+    const expired = expiredTabs(await store.listTabTitles(), date)
+    if (expired.length > 0) {
+      if (mode === 'live') { await store.deleteTabs(expired); retention.deleted = expired }
+      else retention.wouldDelete = expired
+    }
   } catch (err) { error = error ?? err; stop = 'error' }
   finally {
     // Always record what this run cost, even when it failed: that record is what the caps are enforced from.
     const dayTotal = dayStart + runMicro, monthTotal = monthStart + runMicro
     const summary = { event: 'run', mode, date, queriesRun, queriesConfigured: cfg.queries.length, postReads: posts, userReads: users,
       newRows: rows.length, rowsWritten: written ? rows.length : 0, estUsd: usd(runMicro), dayTotalUsd: usd(dayTotal), monthToDateUsd: usd(monthTotal),
-      dailyCapUsd: cfg.dailyCapUsd, monthlyCapUsd: cfg.monthlyCapUsd, stoppedBecause: stop, error: error?.message ?? null }
+      dailyCapUsd: cfg.dailyCapUsd, monthlyCapUsd: cfg.monthlyCapUsd, stoppedBecause: stop, tabsDeleted: retention.deleted, tabsWouldDelete: retention.wouldDelete, error: error?.message ?? null }
     try { await store.appendRun([now().toISOString(), date, mode, queriesRun, posts, users, usd(runMicro), usd(dayTotal), usd(monthTotal), stop]) }
     catch (e) { summary.runsTabError = e.message }
     console.log(JSON.stringify(summary))
@@ -193,11 +200,28 @@ export async function runJob({ cfg, search, store, date, mode, now = () => new D
   return { rows, posts, users, runMicro, stop, error }
 }
 
+// ── Retention ────────────────────────────────────────────────────────────────
+
+export const RETENTION_DAYS = 7
+const DAY_TAB = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Pure. Which tab titles to delete: only exact YYYY-MM-DD names that are real dates and strictly more than
+ * RETENTION_DAYS before `today`. A tab exactly 7 days old is kept. _state, _runs and every other name are never returned.
+ */
+export function expiredTabs(titles, today) {
+  const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - RETENTION_DAYS * 86400_000).toISOString().slice(0, 10)
+  const realDate = t => { const ms = Date.parse(`${t}T00:00:00Z`); return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === t }
+  return titles.filter(t => DAY_TAB.test(t) && realDate(t) && t < cutoff)
+}
+
 // ── Dry-run store (memory only, no network) ──────────────────────────────────
 
-export function memoryStore({ spend = { dayMicro: 0, monthMicro: 0 } } = {}) {
-  const out = { tabs: new Map(), runs: [], state: null }
+export function memoryStore({ spend = { dayMicro: 0, monthMicro: 0 }, existingTabs = [] } = {}) {
+  const out = { tabs: new Map(existingTabs.map(t => [t, []])), runs: [], state: null, deletedTabs: [] }
   return Object.assign(out, {
+    async listTabTitles() { return [...out.tabs.keys()] },
+    async deleteTabs(titles) { for (const t of titles) { out.tabs.delete(t); out.deletedTabs.push(t) } },
     async loadState() { return { since: new Map(), seen: new Map() } },
     async loadSpend() { return spend },
     async appendRows(date, rows) { out.tabs.set(date, [...(out.tabs.get(date) ?? []), ...rows]) },
@@ -298,6 +322,15 @@ export async function googleStore({ sa, sheetId }) {
       if (values.length) await put(STATE_TAB, 'A2', values)
     },
     async appendRun(row) { await append(RUNS_TAB, [row]) },
+    async listTabTitles() { return [...tabs.keys()] },
+    async deleteTabs(titles) {
+      // Re-read the tab ids, and re-check the name pattern here too: this is the only place a tab is ever deleted.
+      const fresh = await googleFetch(`${base}?fields=sheets.properties(sheetId,title)`, token)
+      const ids = new Map(fresh.sheets.map(s => [s.properties.title, s.properties.sheetId]))
+      const requests = titles.filter(t => DAY_TAB.test(t) && ids.has(t)).map(t => ({ deleteSheet: { sheetId: ids.get(t) } }))
+      if (requests.length) await googleFetch(`${base}:batchUpdate`, token, { method: 'POST', body: JSON.stringify({ requests }) })
+      for (const t of titles) tabs.delete(t)
+    },
   }
 }
 
