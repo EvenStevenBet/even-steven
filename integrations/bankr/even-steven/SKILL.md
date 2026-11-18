@@ -1,6 +1,6 @@
 ---
 name: even-steven
-description: Bet on sports spreads on Base with Even Steven, a houseless parimutuel protocol, and claim winnings. Use when the user wants to see open Even Steven games, check a line or pool, place a bet on a team's side of the spread, check their bets, or claim a payout. It is non-custodial because the Bankr wallet signs a USDC authorization, Even Steven's relay pays the gas, and USDC moves straight from the wallet to the market. Bets are 1 to 25 USDC by default.
+description: Bet on sports spreads on Base with Even Steven, a houseless parimutuel protocol, and claim winnings. Use when the user wants to see open Even Steven games, check a line or pool, place a bet on a team's side of the spread, check their bets, or claim a payout. Even Steven never holds your USDC, because the Bankr wallet signs a USDC authorization, Even Steven's relay pays the gas, and USDC moves straight from the wallet to the market. Bankr holds the wallet itself. Bets are 1 to 25 USDC by default.
 metadata:
   {
     "clawdbot":
@@ -16,7 +16,7 @@ metadata:
 
 Bet even-odds! Back either side at even money. The spread moves to balance the pool, so $100 wins $100. Get in early and lock a better spread than the crowd gets later. Flat 2% of your bet. Nothing else. No overround, no margin in the odds, no house betting against you.
 
-Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are in USDC. The Bankr wallet signs and Even Steven's relay pays the gas. USDC moves straight from the wallet to the market contract, and the relay never holds it.
+Even Steven is a houseless parimutuel sports betting protocol on Base. Bets are in USDC. The Bankr wallet signs and Even Steven's relay pays the gas. USDC moves straight from the wallet to the market contract, and the relay never holds it. The wallet's keys are held by Bankr, not by Even Steven.
 
 ## Rules the agent must follow
 

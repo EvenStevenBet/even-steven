@@ -5,7 +5,7 @@ the skill's reply templates: bettor-facing replies come from SKILL.md and the sc
 
 ## What it does
 
-Non-custodial betting from a Bankr wallet. The wallet signs a USDC `ReceiveWithAuthorization`
+Betting from a Bankr wallet, with no Even Steven custody of funds (Bankr holds the wallet keys). The wallet signs a USDC `ReceiveWithAuthorization`
 through Bankr's `POST /wallet/sign`; Even Steven's relay (`POST /api/bet`) submits it and pays the
 gas; USDC moves from the wallet straight to the market. The skill never calls `/wallet/submit`,
 `/wallet/transfer` or `/wallet/swap`.
@@ -44,6 +44,7 @@ with a wallet-address ref earns that wallet 50 points per USDC. Leaderboard at e
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `BANKR_API_KEY` | unset | Bankr key or a host stand-in. Checked first; then the config file below; then no key header at all (a sandbox host may attach it). Never printed or written |
 | `BANKR_CONFIG` | `~/.bankr/config.json` | Bankr config holding `apiKey`; read the same way as the AgenticBets skill, never printed or written |
 | `ES_MAX_STAKE` | `25` | Maximum stake in USDC (the minimum is 1) |
 | `ES_REF` | unset | Optional constant `ref`, see above |
