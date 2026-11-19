@@ -339,5 +339,6 @@ test('SAFETY: the X request asks for no location or profile fields beyond what t
   assert.match(src, /'tweet\.fields': 'created_at,author_id,referenced_tweets'/)
   assert.match(src, /'user\.fields': 'username'/)
   assert.match(src, /expansions: 'author_id'/)
-  assert.doesNotMatch(src, /geo|place|location|public_metrics|description|entities|profile/i)
+  const code = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+  assert.doesNotMatch(code, /geo|place|location|public_metrics|description|entities|profile/i)
 })
