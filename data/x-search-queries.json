@@ -1,0 +1,12 @@
+{
+  "queries": [
+    "\"polymarket bot\"",
+    "\"kalshi bot\"",
+    "\"nfl model\" (spread OR picks OR betting)"
+  ],
+  "excludeRetweets": true,
+  "lang": "en",
+  "maxPostsPerQuery": 50,
+  "dailyCapUsd": 3,
+  "monthlyCapUsd": 25
+}
