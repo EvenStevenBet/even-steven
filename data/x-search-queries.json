@@ -1,6 +1,6 @@
 {
   "queries": [
-    "\"polymarket bot\"",
+    "(\"I built\" OR \"my\") (polymarket OR kalshi) bot -has:links",
     "\"kalshi bot\"",
     "\"nfl model\" (spread OR picks OR betting)"
   ],
