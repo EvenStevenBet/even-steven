@@ -137,11 +137,11 @@ export const estimateMicro = (posts, users) => posts * PRICE_POST_MICRO + users 
 
 /**
  * store: { loadState() → {since:Map, seen:Map}, loadSpend(date) → {dayMicro, monthMicro},
- *          appendRows(date, rows), saveState({since, seen}), appendRun(row) }
+ *          appendRows(date, rows), saveState({since, seen, tabs}), appendRun(row) }
  * search: async ({query, maxResults, sinceId}) → X response body
  */
 export async function runJob({ cfg, search, store, date, mode, now = () => new Date() }) {
-  const { since, seen: seenDays } = await store.loadState()
+  const { since, seen: seenDays, tabs: tabRecords } = await store.loadState()
   const { dayMicro: dayStart, monthMicro: monthStart } = await store.loadSpend(date)
   const dailyCap = toMicro(cfg.dailyCapUsd), monthlyCap = toMicro(cfg.monthlyCapUsd)
   const seen = new Set(seenDays.keys())
@@ -179,12 +179,19 @@ export async function runJob({ cfg, search, store, date, mode, now = () => new D
     const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - SEEN_DAYS * 86400_000).toISOString().slice(0, 10)
     for (const [id, d] of seenDays) if (d >= cutoff) keep.set(id, d)
     for (const id of seen) if (!keep.has(id)) keep.set(id, today)
-    await store.saveState({ since: newSince, seen: keep })
+    // Tabs this job created, with the time of their first write: retention only ever deletes these.
+    const tabs = new Map(tabRecords)
+    if (rows.length > 0 && !tabs.has(date)) tabs.set(date, now().toISOString())
+    await store.saveState({ since: newSince, seen: keep, tabs })
     // Retention (X Developer Policy: stored post content must stay current). Only after a good write.
-    const expired = expiredTabs(await store.listTabTitles(), date)
+    const expired = expiredTabs(tabs, now().getTime())
     if (expired.length > 0) {
-      if (mode === 'live') { await store.deleteTabs(expired); retention.deleted = expired }
-      else retention.wouldDelete = expired
+      if (mode === 'live') {
+        await store.deleteTabs(expired)
+        for (const t of expired) tabs.delete(t)
+        await store.saveState({ since: newSince, seen: keep, tabs }) // drop the records only once the tabs are gone
+        retention.deleted = expired
+      } else retention.wouldDelete = expired
     }
   } catch (err) { error = error ?? err; stop = 'error' }
   finally {
@@ -202,27 +209,28 @@ export async function runJob({ cfg, search, store, date, mode, now = () => new D
 
 // ── Retention ────────────────────────────────────────────────────────────────
 
-export const RETENTION_DAYS = 7
+// Post text stays in the sheet for at most about a day. A once-a-day job cannot hit 24h to the minute (a tab written at
+// 13:31 is 23h59 old at the next 13:30 run), so a tab is deleted once its first write is RETENTION_HOURS old.
+export const RETENTION_HOURS = 20
 const DAY_TAB = /^\d{4}-\d{2}-\d{2}$/
 
 /**
- * Pure. Which tab titles to delete: only exact YYYY-MM-DD names that are real dates and strictly more than
- * RETENTION_DAYS before `today`. A tab exactly 7 days old is kept. _state, _runs and every other name are never returned.
+ * Pure. Which tabs to delete: only tabs THIS JOB recorded in _state (name must also be an exact YYYY-MM-DD) whose first
+ * write is at least RETENTION_HOURS before `nowMs`. _state, _runs, Leads and any tab the job did not create are never
+ * returned, whatever their name.
  */
-export function expiredTabs(titles, today) {
-  const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - RETENTION_DAYS * 86400_000).toISOString().slice(0, 10)
-  const realDate = t => { const ms = Date.parse(`${t}T00:00:00Z`); return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === t }
-  return titles.filter(t => DAY_TAB.test(t) && realDate(t) && t < cutoff)
+export function expiredTabs(records, nowMs) {
+  return [...records].filter(([t, iso]) => DAY_TAB.test(t) && Number.isFinite(Date.parse(iso)) && nowMs - Date.parse(iso) >= RETENTION_HOURS * 3600_000).map(([t]) => t)
 }
 
 // ── Dry-run store (memory only, no network) ──────────────────────────────────
 
-export function memoryStore({ spend = { dayMicro: 0, monthMicro: 0 }, existingTabs = [] } = {}) {
+export function memoryStore({ spend = { dayMicro: 0, monthMicro: 0 }, existingTabs = [], tabRecords = new Map() } = {}) {
   const out = { tabs: new Map(existingTabs.map(t => [t, []])), runs: [], state: null, deletedTabs: [] }
   return Object.assign(out, {
     async listTabTitles() { return [...out.tabs.keys()] },
     async deleteTabs(titles) { for (const t of titles) { out.tabs.delete(t); out.deletedTabs.push(t) } },
-    async loadState() { return { since: new Map(), seen: new Map() } },
+    async loadState() { return { since: new Map(), seen: new Map(), tabs: new Map(tabRecords) } },
     async loadSpend() { return spend },
     async appendRows(date, rows) { out.tabs.set(date, [...(out.tabs.get(date) ?? []), ...rows]) },
     async saveState(s) { out.state = s },
@@ -294,12 +302,13 @@ export async function googleStore({ sa, sheetId }) {
   return {
     async loadState() {
       const r = await get(STATE_TAB, 'A2:C')
-      const since = new Map(), seen = new Map()
+      const since = new Map(), seen = new Map(), tabs = new Map()
       for (const [kind, key, value] of r.values ?? []) {
         if (kind === 'since') since.set(String(key), String(value))
         else if (kind === 'seen') seen.set(String(key), String(value))
+        else if (kind === 'tab') tabs.set(String(key), String(value))
       }
-      return { since, seen }
+      return { since, seen, tabs }
     },
     async loadSpend(date) {
       const r = await get(RUNS_TAB, 'A2:J')
@@ -316,8 +325,8 @@ export async function googleStore({ sa, sheetId }) {
       await ensureTab(date, { header: COLUMNS })
       await append(date, rows)
     },
-    async saveState({ since, seen }) {
-      const values = [...[...since].map(([k, v]) => ['since', k, v]), ...[...seen].map(([k, v]) => ['seen', k, v])]
+    async saveState({ since, seen, tabs: records = new Map() }) {
+      const values = [...[...since].map(([k, v]) => ['since', k, v]), ...[...seen].map(([k, v]) => ['seen', k, v]), ...[...records].map(([k, v]) => ['tab', k, v])]
       await googleFetch(`${base}/values/${rng(STATE_TAB, 'A2:C')}:clear`, token, { method: 'POST', body: '{}' })
       if (values.length) await put(STATE_TAB, 'A2', values)
     },

@@ -249,73 +249,95 @@ test('the workflow is a dry run unless explicitly made live, and the first manua
   assert.match(wf, /max_posts_per_query:[\s\S]*?default: '10'/)
 })
 
-// ── Retention: stored post text must not outlive 7 days ──────────────────────
+// ── Retention: post text must not outlive about a day ───────────────────────
 
-const TABS = ['_state', '_runs', 'Sheet1', 'Notes', '2026-11-09', '2026-11-10', '2026-11-11', '2026-11-17', '2026-11-18', '2026-11-1', '2026-11-10 copy', '2026-13-40', '2026-11-03']
+const H = 3600_000
+const NOW = Date.parse('2026-11-19T13:30:00Z')
+const iso = hoursAgo => new Date(NOW - hoursAgo * H).toISOString()
+const OTHER = ['_state', '_runs', 'Leads', 'Sheet1', '2026-11-01']  // 2026-11-01 matches the name pattern but the job did not create it
+const RECORDS = new Map([['2026-11-17', iso(48)], ['2026-11-18', iso(23.9)], ['2026-11-19', iso(1)]])
 
-test('expiredTabs: only exact YYYY-MM-DD tabs strictly older than 7 days; the 7-day-old tab is kept', () => {
-  // today 2026-11-17: cutoff is 2026-11-10, which is kept; 2026-11-09 and 2026-11-03 go
-  assert.deepEqual(expiredTabs(TABS, '2026-11-17').sort(), ['2026-11-03', '2026-11-09'])
-  assert.deepEqual(expiredTabs(['2026-11-10'], '2026-11-17'), [])
-  assert.deepEqual(expiredTabs(['2026-11-09'], '2026-11-17'), ['2026-11-09'])
+test('expiredTabs: recorded tabs at least 20h old go; younger ones stay', () => {
+  assert.deepEqual(expiredTabs(RECORDS, NOW).sort(), ['2026-11-17', '2026-11-18'])
+  assert.deepEqual(expiredTabs(new Map([['2026-11-18', iso(19.9)]]), NOW), [])
+  assert.deepEqual(expiredTabs(new Map([['2026-11-18', iso(20)]]), NOW), ['2026-11-18'])
 })
 
-test('expiredTabs never returns _state, _runs, other names, malformed or impossible dates, or future dates', () => {
-  const out = expiredTabs(TABS, '2026-11-17')
-  for (const keep of ['_state', '_runs', 'Sheet1', 'Notes', '2026-11-1', '2026-11-10 copy', '2026-13-40', '2026-11-18', '2026-11-17']) assert.ok(!out.includes(keep), keep)
+test('expiredTabs never returns a tab the job did not record, or a non-date name even if recorded', () => {
+  assert.deepEqual(expiredTabs(new Map(), NOW), [])
+  assert.deepEqual(expiredTabs(new Map([['Leads', iso(99)], ['_state', iso(99)], ['_runs', iso(99)], ['2026-11-10 copy', iso(99)], ['2026-11-18', 'garbage']]), NOW), [])
 })
 
-test('a live run deletes old day tabs after writing and leaves every other tab', async () => {
-  const store = memoryStore({ existingTabs: TABS })
+const runAt = (store, mode, now = new Date(NOW)) => {
   const lines = []; const orig = console.log; console.log = l => lines.push(l)
-  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'live' })
-  console.log = orig
-  assert.deepEqual(store.deletedTabs.sort(), ['2026-11-03', '2026-11-09'])
-  for (const t of TABS.filter(t => !['2026-11-03', '2026-11-09'].includes(t))) assert.ok(store.tabs.has(t), t)
-  assert.deepEqual(JSON.parse(lines.at(-1)).tabsDeleted.sort(), ['2026-11-03', '2026-11-09'])
+  return runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-19', mode, now: () => now }).finally(() => { console.log = orig }).then(r => ({ r, last: JSON.parse(lines.at(-1)) }))
+}
+
+test('a live run deletes the old recorded tabs after writing; Leads, _state, _runs and unrecorded tabs are never touched', async () => {
+  const store = memoryStore({ existingTabs: [...OTHER, ...RECORDS.keys()], tabRecords: RECORDS })
+  const { last } = await runAt(store, 'live')
+  assert.deepEqual(store.deletedTabs.sort(), ['2026-11-17', '2026-11-18'])
+  for (const t of [...OTHER, '2026-11-19']) assert.ok(store.tabs.has(t), t)
+  assert.deepEqual(last.tabsDeleted.sort(), ['2026-11-17', '2026-11-18'])
+  // the records of deleted tabs are dropped; today's tab (first write now) is recorded
+  assert.deepEqual([...store.state.tabs.keys()].sort(), ['2026-11-19'])
+})
+
+test('a brand-new day tab is recorded with its first-write time and not deleted by the run that wrote it', async () => {
+  const store = memoryStore()
+  await runAt(store, 'live')
+  assert.equal(store.state.tabs.get('2026-11-19'), new Date(NOW).toISOString())
+  assert.deepEqual(store.deletedTabs, [])
 })
 
 test('a dry run deletes nothing and logs what it would delete', async () => {
-  const store = memoryStore({ existingTabs: TABS })
-  const lines = []; const orig = console.log; console.log = l => lines.push(l)
-  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'dry-run' })
-  console.log = orig
+  const store = memoryStore({ existingTabs: [...OTHER, ...RECORDS.keys()], tabRecords: RECORDS })
+  const { last } = await runAt(store, 'dry-run')
   assert.deepEqual(store.deletedTabs, [])
-  for (const t of TABS) assert.ok(store.tabs.has(t), t)
-  const s = JSON.parse(lines.at(-1))
-  assert.deepEqual(s.tabsWouldDelete.sort(), ['2026-11-03', '2026-11-09'])
-  assert.deepEqual(s.tabsDeleted, [])
+  for (const t of [...OTHER, ...RECORDS.keys()]) assert.ok(store.tabs.has(t), t)
+  assert.deepEqual(last.tabsWouldDelete.sort(), ['2026-11-17', '2026-11-18'])
+  assert.deepEqual(last.tabsDeleted, [])
 })
 
 test('retention does not run when the write failed', async () => {
-  const store = memoryStore({ existingTabs: TABS })
+  const store = memoryStore({ existingTabs: [...RECORDS.keys()], tabRecords: RECORDS })
   store.appendRows = async () => { throw new Error('sheet down') }
-  const orig = console.log; console.log = () => {}
-  await runJob({ cfg: baseCfg(), search: fixtureSearch(fixture), store, date: '2026-11-17', mode: 'live' })
-  console.log = orig
+  await runAt(store, 'live')
   assert.deepEqual(store.deletedTabs, [])
 })
 
-test('Google store: deleting sends deleteSheet only for the exact day tabs asked for, via the Sheets API', async () => {
+test('Google store: tab records round-trip through _state, and deleting sends deleteSheet only for day-named tabs asked for', async () => {
   const calls = []
   const origFetch = globalThis.fetch
   const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })
   const sa = { client_email: 'sa@example.iam', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) }
-  const sheets = [['_state', 1], ['_runs', 2], ['Notes', 3], ['2026-11-09', 4], ['2026-11-17', 5]].map(([title, sheetId]) => ({ properties: { sheetId, title, hidden: title === '_state' } }))
+  const sheets = [['_state', 1], ['_runs', 2], ['Leads', 3], ['2026-11-17', 4], ['2026-11-19', 5]].map(([title, sheetId]) => ({ properties: { sheetId, title, hidden: title === '_state' } }))
   globalThis.fetch = async (url, init = {}) => {
     const u = String(url); calls.push({ url: u, method: init.method ?? 'GET', body: init.body })
     const json = o => ({ ok: true, status: 200, json: async () => o, text: async () => JSON.stringify(o) })
     if (u.includes('oauth2.googleapis.com')) return json({ access_token: 'g' })
     if (u.includes('fields=sheets.properties')) return json({ sheets })
+    if (u.includes('_state') && u.includes('/values/') && (init.method ?? 'GET') === 'GET') return json({ values: [['tab', '2026-11-17', iso(30)]] })
     return json({})
   }
   try {
     const store = await googleStore({ sa, sheetId: 'abcdefghijklmnopqrstuvwxyz' })
-    assert.deepEqual(expiredTabs(await store.listTabTitles(), '2026-11-17'), ['2026-11-09'])
-    await store.deleteTabs(['2026-11-09', '_state', 'Notes'])  // the guard drops the two that are not day tabs
+    const st = await store.loadState()
+    assert.deepEqual([...st.tabs], [['2026-11-17', iso(30)]])
+    await store.saveState({ since: new Map(), seen: new Map(), tabs: st.tabs })
+    await store.deleteTabs(['2026-11-17', '_state', 'Leads'])  // the guard drops the two that are not day tabs
   } finally { globalThis.fetch = origFetch }
   const del = calls.filter(c => String(c.body ?? '').includes('deleteSheet'))
   assert.equal(del.length, 1)
   assert.deepEqual(JSON.parse(del[0].body).requests, [{ deleteSheet: { sheetId: 4 } }])
+  assert.ok(calls.some(c => String(c.body ?? '').includes('"tab"') && c.url.includes('valueInputOption=RAW')))
   assert.ok(calls.every(c => c.url.startsWith('https://sheets.googleapis.com/') || c.url.includes('oauth2.googleapis.com')))
+})
+
+test('SAFETY: the X request asks for no location or profile fields beyond what the five columns need', () => {
+  const src = read('scripts/x-search-client.mjs')
+  assert.match(src, /'tweet\.fields': 'created_at,author_id,referenced_tweets'/)
+  assert.match(src, /'user\.fields': 'username'/)
+  assert.match(src, /expansions: 'author_id'/)
+  assert.doesNotMatch(src, /geo|place|location|public_metrics|description|entities|profile/i)
 })

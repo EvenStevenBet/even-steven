@@ -19,13 +19,21 @@ Read-only daily search of X recent posts for lead research. Writes one tab per d
 
 ## Sheet layout
 
-- `YYYY-MM-DD`: handle, post link, post text, date, query. Appended RAW; leading `= + - @` get a `'` prefix.
-- `_state` (hidden): `since` per query and `seen` post ids (kept 8 days). Advanced only after rows are written.
+- `YYYY-MM-DD`: handle, post link, post text, date, query. Appended RAW; leading `= + - @` get a `'` prefix. Deleted about a day later (see Data retention).
+- `_state` (hidden): `since` per query, `seen` post ids (kept 8 days), and `tab` first-write times. Advanced only after rows are written.
 - `_runs`: one row per run: time, date, mode, queries run, post reads, user reads, est. USD, day total, month-to-date, stop reason.
 
 ## Data retention
 
-Every live run, after writing, deletes daily tabs whose exact `YYYY-MM-DD` name is more than 7 days old (a 7-day-old tab is kept), so post text and links are stored for at most 7 days. `_state`, `_runs` and any other tab are never touched. A dry run deletes nothing and logs what it would delete. The job keeps no post text beyond that: only one `since_id` per query and the post ids seen in the last 8 days (for dedupe) live on in `_state`. It stores no off-X data about the people in the posts.
+Post text and links stay in the sheet for about a day. Every live run, after writing, deletes the daily tabs this job created
+(recorded with their first-write time in `_state`) once they are at least 20 hours old; the threshold is under 24h because a
+once-a-day job would otherwise miss a tab that is 23h59 old. `_state`, `_runs`, `Leads` and any tab the job did not create are
+never touched. A dry run deletes nothing and logs what it would delete. If the daily run is skipped (GitHub's cron can drop
+runs), tabs stay until the next run; dispatch the workflow by hand to clear them.
+
+The job keeps no post text beyond that. `_state` keeps one `since_id` per query and the post ids seen in the last 8 days (for
+dedupe). It stores no location data and no off-X data about the people in the posts, and nothing in it matches handles to
+wallets, GitHub, Discord or other accounts.
 
 ## Cost model
 
