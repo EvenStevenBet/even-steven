@@ -1,8 +1,11 @@
 {
   "queries": [
     "(\"I built\" OR \"my\") (polymarket OR kalshi) bot -has:links",
-    "\"kalshi bot\"",
-    "\"nfl model\" (spread OR picks OR betting)"
+    "\"nfl model\" (spread OR picks OR betting)",
+    "(\"I built\" OR \"my\") (\"betting model\" OR \"sports betting model\" OR \"sportsbook model\") -has:links",
+    "(\"I built\" OR \"my\") (NFL OR NBA) model -has:links",
+    "(\"I built\" OR \"my\") (\"prediction market\" OR \"prediction markets\") (agent OR bot) -has:links",
+    "(\"I built\" OR \"my\") (arbitrage OR \"trading agent\" OR \"trading bot\") -has:links"
   ],
   "excludeRetweets": true,
   "lang": "en",
